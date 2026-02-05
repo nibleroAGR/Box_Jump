@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+<html lang="es">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport"
+        content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+    <title>Box Jump Precision</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+
+<body>
+    <div id="game-container">
+        <canvas id="gameCanvas"></canvas>
+        <div id="ui-overlay">
+            <div id="level-container" class="hud-item left">
+                <span class="hud-label">NIVEL</span>
+                <span id="level-value">1</span>
+            </div>
+            <div id="score-container" class="hud-item right">
+                <span class="hud-label">PUNTOS</span>
+                <span id="score-value">0</span>
+            </div>
+            <div id="msg-overlay" class="hidden">
+                <h2 id="msg-text">EXCELENTE</h2>
+            </div>
+            <div id="start-screen" class="screen">
+                <div class="glass-card">
+                    <h1>BOX JUMP</h1>
+                    <p>Precisión es la clave</p>
+                    <button id="start-btn">EMPEZAR</button>
+                </div>
+            </div>
+            <div id="game-over-screen" class="screen hidden">
+                <div class="glass-card">
+                    <h2>FIN DEL JUEGO</h2>
+                    <p>Llegaste al Nivel <span id="final-score">0</span></p>
+                    <button id="restart-btn">REINTENTAR</button>
+                </div>
+            </div>
+        </div>
+    </div>
+    <script src="game.js"></script>
+</body>
+
+</html>
