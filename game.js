@@ -8,12 +8,16 @@ const ctx = canvas.getContext('2d');
 const scoreValue = document.getElementById('score-value');
 const levelValue = document.getElementById('level-value');
 const finalScore = document.getElementById('final-score');
+const finalLevel = document.getElementById('final-level');
 const startBtn = document.getElementById('start-btn');
 const restartBtn = document.getElementById('restart-btn');
 const startScreen = document.getElementById('start-screen');
 const gameOverScreen = document.getElementById('game-over-screen');
 const msgOverlay = document.getElementById('msg-overlay');
 const msgText = document.getElementById('msg-text');
+const shopFab = document.getElementById('shop-fab');
+const shopModal = document.getElementById('shop-modal');
+const closeShopBtn = document.getElementById('close-shop-btn');
 
 // CONFIGURACIÓN GLOBAL
 let width, height;
@@ -32,8 +36,34 @@ const THEME = {
     platform: '#1e2d4d',
     platformBright: '#3d5a9d',
     platformVanishing: '#ff00ff',
-    ball: '#ff00ea'
+    platformSpring: '#00ffcc',
+    platformOscillating: '#ff00aa',
+    platformFlash: '#ffffff',
+    platformMini: '#ffcc00',
+    platformFragile: '#ffffff',
+    platformMoving: '#ffae00',
+    ball: '#ff00ea',
+    shield: '#00ff64',
+    doubleJump: '#ff00ea',
+    obstacle: '#ff3300'
 };
+
+// MULTIPLIERS & STATE
+let combo = 0;
+let maxCombo = 0;
+let windForce = 0;
+let gravityFactor = 1.0;
+let hasShield = false;
+let canDoubleJump = false;
+let doubleJumpUsed = false;
+let obstacles = [];
+let powerups = [];
+let blackHoles = [];
+let inventory = [];
+let ballSpeedFactor = 1.0;
+let greenPowerActive = 0;
+let platformItemActive = false;
+let bombActive = false;
 
 // --- PLAYER ---
 const player = {
@@ -51,15 +81,44 @@ const player = {
     currentPlatform: null,
 
     update() {
+        // Viento si no está en el suelo
         if (!this.onGround) {
-            this.vy += this.gravity;
+            this.vx += windForce;
+            this.vy += this.gravity * gravityFactor;
             this.rotation += this.angularVelocity;
         } else {
             this.vy = 0;
-            this.vx *= 0.85;
+            // Fricción según plataforma
+            let friction = 0.85;
+            if (this.currentPlatform && this.currentPlatform.type === 'ice') friction = 0.98;
+            if (this.currentPlatform && this.currentPlatform.type === 'sticky') friction = 0;
+
+            this.vx *= friction;
             this.rotation = 0;
             this.angularVelocity = 0;
+
+            // Sincronización con plataformas móviles/oscilantes
+            if (this.currentPlatform) {
+                if (this.currentPlatform.type === 'moving' && !this.currentPlatform.isPaused) {
+                    this.x += this.currentPlatform.vx;
+                }
+                if (this.currentPlatform.type === 'oscillating') {
+                    this.y += this.currentPlatform.vy;
+                }
+            }
         }
+
+        // Atracción Agujeros Negros
+        blackHoles.forEach(bh => {
+            const dx = bh.x - (this.x + this.w / 2);
+            const dy = bh.y - (this.y + this.h / 2);
+            const dist = Math.sqrt(dx * dx + dy * dy);
+            if (dist < bh.radius * 3) {
+                const force = (1 - dist / (bh.radius * 3)) * 0.5;
+                this.vx += (dx / dist) * force;
+                this.vy += (dy / dist) * force;
+            }
+        });
 
         this.x += this.vx;
         this.y += this.vy;
@@ -68,7 +127,11 @@ const player = {
         if (this.x + this.w > width) this.x = width - this.w;
 
         if (this.y > height) {
-            endGame();
+            if (hasShield) {
+                useShield();
+            } else {
+                endGame();
+            }
         }
     },
 
@@ -123,7 +186,7 @@ const precisionSystem = {
 
     update() {
         if (!this.ball.active) return;
-        this.ball.y += this.ball.speed;
+        this.ball.y += this.ball.speed * ballSpeedFactor;
         if (this.ball.y > height + this.ball.radius) {
             this.ball.active = false;
             this.spawnBall();
@@ -140,27 +203,43 @@ const precisionSystem = {
         if (dist < maxDist) {
             this.ball.active = false;
             let tier = "MISSED", multiplier = 0, subScore = 0;
-            const greenLimit = maxDist * this.targetArea.greenScale;
+
+            // Item Power: Zona verde x5
+            const currentGreenScale = greenPowerActive > 0 ? Math.min(1.0, this.targetArea.greenScale * 5) : this.targetArea.greenScale;
+            if (greenPowerActive > 0) greenPowerActive--;
+
+            const greenLimit = maxDist * currentGreenScale;
             const yellowLimit = maxDist * 0.65;
 
             if (dist < greenLimit) {
                 tier = "PERFECT"; multiplier = 1.0;
                 subScore = Math.ceil((1 - (dist / greenLimit)) * 5) / 5;
                 if (subScore < 0.2) subScore = 0.2;
+                combo++;
+                if (combo > maxCombo) maxCombo = combo;
             } else if (dist < yellowLimit) {
                 tier = "GOOD"; multiplier = 0.7; subScore = 0.5;
+                combo = 0;
             } else {
                 tier = "POOR"; multiplier = 0.4; subScore = 0.2;
+                combo = 0;
             }
 
-            const points = Math.round(subScore * 100);
+            // Bono por combo
+            const comboBonus = 1 + (combo > 1 ? combo * 0.1 : 0);
+            const points = Math.round(subScore * 100 * comboBonus);
             score += points;
             scoreValue.innerText = score;
-            showFeedback(tier + (tier === "PERFECT" ? ` x${Math.round(subScore * 5)}` : "") + " +" + points);
+
+            let feedback = tier + (tier === "PERFECT" ? ` x${Math.round(subScore * 5)}` : "") + " +" + points;
+            if (combo > 1) feedback += `\nCOMBO x${combo}!`;
+            showFeedback(feedback);
+
             createExplosion(this.ball.x, this.ball.y, multiplier);
             this.spawnBall();
             return { multiplier, tier, subScore };
         }
+        combo = 0; // Fallar tiro reinicia combo
         return { multiplier: 0, tier: "MISSED", subScore: 0 };
     },
 
@@ -275,25 +354,83 @@ class Prop {
 
 // --- PLATFORMS ---
 class Platform {
-    constructor(x, y, w, h, isGoal = false, isVanishing = false) {
+    constructor(x, y, w, h, isGoal = false, type = 'normal') {
         this.x = x; this.y = y; this.w = w; this.h = h;
-        this.isGoal = isGoal; this.isVanishing = isVanishing;
-        this.alpha = 1.0; this.vanishingStarted = false; this.startTime = 0;
+        this.isGoal = isGoal;
+        this.type = type; // 'normal', 'vanishing', 'moving', 'ice', 'sticky', 'fragile'
+        this.alpha = 1.0;
+        this.vanishingStarted = false;
+        this.startTime = 0;
+        this.vx = (type === 'moving') ? (Math.random() > 0.5 ? 2 : -2) * (1 + level * 0.1) : 0;
+        this.vy = (type === 'oscillating') ? (Math.random() > 0.5 ? 1.5 : -1.5) * (1 + level * 0.1) : 0;
+        this.isBroken = false;
+        this.isPaused = false;
+        this.pauseTimer = 0;
+        this.oscOffset = 0;
+        this.isVisible = true;
+
+        if (type === 'mini_sticky') this.w *= 0.6;
     }
 
     draw() {
+        if (this.isBroken) return;
+        if (this.type === 'flash' && !this.isVisible) {
+            // Dibujar solo borde si está invisible
+            ctx.strokeStyle = 'rgba(255,255,255,0.1)';
+            ctx.strokeRect(this.x, this.y, this.w, this.h);
+            return;
+        }
         ctx.save();
         ctx.globalAlpha = this.alpha;
+
+        // Glow effect
+        ctx.shadowBlur = 10;
+        ctx.shadowColor = this.getColor(true);
+
         const grad = ctx.createLinearGradient(this.x, this.y, this.x, this.y + this.h);
-        if (this.isGoal) { grad.addColorStop(0, '#ffd700'); grad.addColorStop(1, '#b8860b'); }
-        else if (this.isVanishing) { grad.addColorStop(0, '#ff00ff'); grad.addColorStop(1, '#660066'); }
-        else { grad.addColorStop(0, THEME.platformBright); grad.addColorStop(1, THEME.platform); }
+        const baseCol = this.getColor();
+        grad.addColorStop(0, baseCol);
+        grad.addColorStop(1, this.type === 'normal' ? THEME.platform : '#000');
+
         ctx.fillStyle = grad;
-        ctx.fillRect(this.x, this.y, this.w, this.h);
+        ctx.fillRect(this.x, this.y, (this.type === 'temp_full' ? width : this.w), this.h);
+
         if (this.isGoal) this.drawFlag();
-        ctx.fillStyle = 'rgba(255,255,255,0.2)';
-        ctx.fillRect(this.x, this.y, this.w, 2);
+
+        // Highlight top
+        ctx.fillStyle = 'rgba(255,255,255,0.3)';
+        ctx.fillRect(this.x, this.y, (this.type === 'temp_full' ? width : this.w), 3);
+
+        // Visual decoration for types
+        if (this.type === 'spring') {
+            ctx.fillStyle = 'white';
+            for (let i = 0; i < 4; i++) ctx.fillRect(this.x + 10 + i * (this.w / 4), this.y + 2, 4, 10);
+        }
+        if (this.type === 'oscillating') {
+            ctx.fillStyle = 'rgba(255,255,255,0.4)';
+            ctx.fillRect(this.x, this.y + this.h / 2 - 1, this.w, 2);
+        }
+        if (this.isPaused) {
+            ctx.fillStyle = 'rgba(255,255,255,0.5)';
+            ctx.font = "bold 10px Arial";
+            ctx.fillText("WAIT", this.x + this.w / 2 - 15, this.y + 15);
+        }
+
         ctx.restore();
+    }
+
+    getColor(isGlow = false) {
+        if (this.isGoal) return isGlow ? '#ffd700' : '#ffd700';
+        switch (this.type) {
+            case 'vanishing': return THEME.platformVanishing;
+            case 'moving': return THEME.platformMoving;
+            case 'spring': return THEME.platformSpring;
+            case 'oscillating': return THEME.platformOscillating;
+            case 'flash': return THEME.platformFlash;
+            case 'mini_sticky': return THEME.platformMini;
+            case 'fragile': return THEME.platformFragile;
+            default: return THEME.platformBright;
+        }
     }
 
     drawFlag() {
@@ -305,19 +442,162 @@ class Platform {
     }
 
     update() {
-        if (this.isVanishing && this.vanishingStarted) {
+        if (this.isBroken) return false;
+
+        // Movimiento Horizontal (Moving)
+        if (this.type === 'moving') {
+            if (this.isPaused) {
+                if (Date.now() > this.pauseTimer) this.isPaused = false;
+            } else {
+                this.x += this.vx;
+                if (this.x < 0 || this.x + this.w > width) {
+                    this.vx *= -1;
+                    this.x = this.x < 0 ? 0 : width - this.w;
+                    this.isPaused = true;
+                    this.pauseTimer = Date.now() + 2000;
+                }
+            }
+        }
+
+        // Movimiento Vertical (Oscillating)
+        if (this.type === 'oscillating') {
+            this.y += this.vy;
+            this.oscOffset += this.vy;
+            if (Math.abs(this.oscOffset) > 50) {
+                this.vy *= -1;
+            }
+        }
+
+        // Visibilidad (Flash)
+        if (this.type === 'flash') {
+            if (!this.flashTime) this.flashTime = Date.now();
+            if (Date.now() - this.flashTime > 2000) {
+                this.isVisible = !this.isVisible;
+                this.flashTime = Date.now();
+            }
+        }
+
+        // Desvanecimiento / Rotura...
+        if ((this.type === 'vanishing' || this.type === 'fragile') && this.vanishingStarted) {
             const elapsed = Date.now() - this.startTime;
-            this.alpha = Math.max(0, 1 - (elapsed / 5000));
-            if (elapsed >= 5000) return false;
+            const duration = this.type === 'vanishing' ? 5000 : 1500;
+            this.alpha = Math.max(0, 1 - (elapsed / duration));
+            if (elapsed >= duration) {
+                this.isBroken = true;
+                if (this.type === 'fragile') createExplosion(this.x + this.w / 2, this.y, 0.5);
+                return false;
+            }
         }
         return true;
     }
 }
 
+class Obstacle {
+    constructor() {
+        this.w = 40; this.h = 20;
+        this.x = Math.random() > 0.5 ? -this.w : width;
+        this.y = player.y - 300 - Math.random() * 400;
+        this.vx = (this.x < 0 ? 1 : -1) * (2 + level * 0.2);
+        this.color = THEME.obstacle;
+    }
+    update() {
+        this.x += this.vx;
+        return (this.x > -100 && this.x < width + 100);
+    }
+    draw() {
+        ctx.save();
+        ctx.shadowBlur = 15; ctx.shadowColor = this.color;
+        ctx.fillStyle = this.color;
+        ctx.fillRect(this.x, this.y, this.w, this.h);
+        // "Ojos" del drone
+        ctx.fillStyle = '#fff';
+        ctx.fillRect(this.x + 5, this.y + 5, 5, 5);
+        ctx.fillRect(this.x + this.w - 10, this.y + 5, 5, 5);
+        ctx.restore();
+    }
+}
+
+class PowerUp {
+    constructor(x, y, type) {
+        this.x = x; this.y = y; this.type = type; // 'shield', 'doubleJump'
+        this.size = 20;
+        this.bob = 0;
+    }
+    update() {
+        this.bob = Math.sin(Date.now() / 300) * 5;
+        const dx = (this.x + this.size / 2) - (player.x + player.w / 2);
+        const dy = (this.y + this.size / 2 + this.bob) - (player.y + player.h / 2);
+        const dist = Math.sqrt(dx * dx + dy * dy);
+        if (dist < 30) {
+            if (this.type === 'shield') { hasShield = true; showFeedback("¡ESCUDO ACTIVADO!"); }
+            if (this.type === 'doubleJump') { canDoubleJump = true; showFeedback("¡SALTO DOBLE DISPONIBLE!"); }
+            return false;
+        }
+        return true;
+    }
+    draw() {
+        ctx.save();
+        const col = this.type === 'shield' ? THEME.shield : THEME.doubleJump;
+        ctx.shadowBlur = 20; ctx.shadowColor = col;
+        ctx.fillStyle = col;
+        ctx.beginPath();
+        ctx.arc(this.x + this.size / 2, this.y + this.size / 2 + this.bob, this.size / 2, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.restore();
+    }
+}
+
+class BlackHole {
+    constructor(x, y) {
+        this.x = x; this.y = y; this.radius = 30 + Math.random() * 20;
+    }
+    draw() {
+        ctx.save();
+        const grad = ctx.createRadialGradient(this.x, this.y, 0, this.x, this.y, this.radius);
+        grad.addColorStop(0, '#000');
+        grad.addColorStop(0.7, '#6600ff');
+        grad.addColorStop(1, 'transparent');
+        ctx.fillStyle = grad;
+        ctx.beginPath();
+        ctx.arc(this.x, this.y, this.radius, 0, Math.PI * 2);
+        ctx.fill();
+
+        // Espiral
+        ctx.strokeStyle = 'rgba(255,255,255,0.2)';
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        for (let i = 0; i < 20; i++) {
+            const r = (i / 20) * this.radius;
+            const a = (Date.now() / 500) + (i / 2);
+            ctx.lineTo(this.x + Math.cos(a) * r, this.y + Math.sin(a) * r);
+        }
+        ctx.stroke();
+        ctx.restore();
+    }
+}
+
+function useShield() {
+    hasShield = false;
+    player.vy = -15;
+    player.vx = 0;
+    player.y = player.currentPlatform ? player.currentPlatform.y - 200 : height / 2;
+    player.x = player.currentPlatform ? player.currentPlatform.x + player.currentPlatform.w / 2 : width / 2;
+    showFeedback("¡ESCUDO USADO!");
+    createExplosion(player.x, player.y, 1.0);
+}
+
 function initPlatforms() {
     platforms = [];
     props = [];
+    obstacles = [];
+    powerups = [];
+    blackHoles = [];
+    particles = [];
     level = 1; score = 0; platformsInLevel = 5; platformsReached = 0; totalPlatformGlobalCount = 0;
+    combo = 0; windForce = 0; gravityFactor = 1.0;
+    hasShield = false; canDoubleJump = false; doubleJumpUsed = false;
+    inventory = []; updateInventoryUI();
+    ballSpeedFactor = 1.0; greenPowerActive = 0; platformItemActive = false; bombActive = false;
 
     levelValue.innerText = level;
     scoreValue.innerText = score;
@@ -333,18 +613,43 @@ function initPlatforms() {
 
 function spawnNextPlatform(forceGoal = false) {
     const last = platforms[platforms.length - 1];
-    const marginY = 100 + Math.random() * 80;
+    const marginY = 110 + Math.random() * 90;
     const nextY = last.y - marginY;
-    const nextW = 70 + Math.random() * 40;
+    const nextW = Math.max(50, 80 + Math.random() * 40 - (level * 0.5));
     const nextX = 30 + Math.random() * (width - nextW - 80);
 
     totalPlatformGlobalCount++;
-    const isVanishing = !forceGoal && (totalPlatformGlobalCount % 10 === 0);
-    const platform = new Platform(nextX, nextY, nextW, 20, forceGoal, isVanishing);
+
+    // DETERMINAR TIPO DE PLATAFORMA
+    let type = 'normal';
+    if (!forceGoal) {
+        const rand = Math.random();
+        if (level >= 5 && rand < 0.2) type = 'moving';
+        else if (level >= 10 && rand < 0.35) type = (Math.random() > 0.5 ? 'ice' : 'sticky');
+        else if (level >= 20 && rand < 0.5) type = 'fragile';
+        else if (totalPlatformGlobalCount % 10 === 0) type = 'vanishing';
+    }
+
+    const platform = new Platform(nextX, nextY, nextW, 20, forceGoal, type);
     platforms.push(platform);
 
-    // Aleatoriamente añadir un cubo de utilería
-    if (!forceGoal && Math.random() < 0.4) {
+    // Obstáculos (Nivel 15+)
+    if (level >= 15 && Math.random() < 0.3) {
+        obstacles.push(new Obstacle());
+    }
+
+    // Power-ups (Nivel 18+)
+    if (level >= 18 && Math.random() < 0.15 && !hasShield && !canDoubleJump) {
+        powerups.push(new PowerUp(nextX + nextW / 2 - 10, nextY - 50, Math.random() > 0.5 ? 'shield' : 'doubleJump'));
+    }
+
+    // Agujeros Negros (Nivel 25+)
+    if (level >= 25 && Math.random() < 0.1) {
+        blackHoles.push(new BlackHole(Math.random() * width, nextY - 100));
+    }
+
+    // Props (Cajas)
+    if (!forceGoal && Math.random() < 0.3) {
         const propW = 15 + Math.random() * 20;
         const propH = 15 + Math.random() * 20;
         const propX = nextX + Math.random() * (nextW - propW);
@@ -357,16 +662,22 @@ function nextLevel() {
     level++;
     levelValue.innerText = level;
 
-    platformsInLevel = 5 + (level - 1);
+    // Configuración ambiental según nivel
+    windForce = (level >= 12) ? (Math.random() - 0.5) * 0.15 : 0;
+    gravityFactor = (level >= 30 && Math.random() < 0.3) ? 0.4 : 1.0; // Baja gravedad ocasional en modo Caos
+
+    platformsInLevel = 5 + Math.floor(level / 2);
     platformsReached = 0;
-    msgText.innerText = "¡NIVEL " + level + "!";
-    msgText.style.color = "#00f2ff";
-    msgOverlay.classList.remove('hidden');
+    showFeedback("¡NIVEL " + level + "!" + (windForce !== 0 ? "\n¡CUIDADO CON EL VIENTO!" : "") + (gravityFactor < 1 ? "\n¡GRAVEDAD BAJA!" : ""));
 
     const current = player.currentPlatform;
     platforms = [current];
-    props = []; // Limpiamos props viejos al cambiar nivel
-    // Re-spawn platforms for the new level
+    props = [];
+    obstacles = [];
+    powerups = [];
+    // Mantener agujeros negros si están cerca
+    blackHoles = blackHoles.filter(bh => Math.abs(bh.y - player.y) < height);
+
     for (let i = 1; i < platformsInLevel; i++) {
         spawnNextPlatform(i === platformsInLevel - 1);
     }
@@ -429,6 +740,19 @@ function handleJump(precision) {
 function checkCollisions() {
     player.onGround = false;
 
+    // Colisión Jugador con Obstáculos
+    obstacles.forEach(obs => {
+        if (player.x + player.w > obs.x && player.x < obs.x + obs.w &&
+            player.y + player.h > obs.y && player.y < obs.y + obs.h) {
+            if (hasShield) {
+                useShield();
+                obs.x = -1000; // Eliminar obstáculo
+            } else {
+                endGame();
+            }
+        }
+    });
+
     // Colisiones Props con Plataformas
     props.forEach(prop => {
         prop.onGround = false;
@@ -445,13 +769,11 @@ function checkCollisions() {
     props.forEach(prop => {
         if (player.x + player.w > prop.x && player.x < prop.x + prop.w &&
             player.y + player.h > prop.y && player.y < prop.y + prop.h) {
-
-            // Empujón lateral
             const playerCenterX = player.x + player.w / 2;
             const propCenterX = prop.x + prop.w / 2;
             const force = (player.vx || (propCenterX > playerCenterX ? 2 : -2));
             prop.vx += force * 0.5;
-            prop.vy -= 2; // Pequeño salto al chocar
+            prop.vy -= 2;
         }
     });
 
@@ -459,12 +781,21 @@ function checkCollisions() {
     platforms.forEach(p => {
         if (player.vy >= 0 && player.x + player.w > p.x && player.x < p.x + p.w &&
             player.y + player.h >= p.y && player.y + player.h <= p.y + p.h + 10) {
+
+            // Item Bomba se ha movido a triggerAction para elección manual
             player.y = p.y - player.h;
             player.onGround = true;
             if (player.currentPlatform !== p) {
+                // Al aterrizar en plataforma móvil, anular velocidad lateral (Punto 2)
+                if (p.type === 'moving') player.vx = 0;
+
                 player.currentPlatform = p;
                 platformsReached++;
-                if (p.isVanishing && !p.vanishingStarted) { p.vanishingStarted = true; p.startTime = Date.now(); }
+                doubleJumpUsed = false; // Reset salto doble al tocar suelo
+                if ((p.type === 'vanishing' || p.type === 'fragile') && !p.vanishingStarted) {
+                    p.vanishingStarted = true;
+                    p.startTime = Date.now();
+                }
                 if (p.isGoal) nextLevel();
             }
         }
@@ -476,11 +807,11 @@ function update() {
     player.update();
     precisionSystem.update();
 
-    // Actualizar props y eliminar si caen
+    // Actualizar entidades
+    obstacles = obstacles.filter(obs => obs.update());
+    powerups = powerups.filter(pu => pu.update());
     for (let i = props.length - 1; i >= 0; i--) {
-        if (!props[i].update()) {
-            props.splice(i, 1);
-        }
+        if (!props[i].update()) props.splice(i, 1);
     }
 
     checkCollisions();
@@ -498,6 +829,9 @@ function update() {
         player.y += diff;
         platforms.forEach(p => p.y += diff);
         props.forEach(pr => pr.y += diff);
+        obstacles.forEach(o => o.y += diff);
+        powerups.forEach(pu => pu.y += diff);
+        blackHoles.forEach(bh => bh.y += diff);
     }
 
     for (let i = particles.length - 1; i >= 0; i--) {
@@ -509,14 +843,45 @@ function update() {
 
 function draw() {
     ctx.clearRect(0, 0, width, height);
+
+    // Grid de fondo dinámico
     ctx.strokeStyle = 'rgba(255, 255, 255, 0.03)';
-    for (let i = 0; i < height; i += 40) {
-        ctx.beginPath(); ctx.moveTo(0, i + (player.y % 40)); ctx.lineTo(width, i + (player.y % 40)); ctx.stroke();
+    const offset = (player.y % 40);
+    for (let i = -40; i < height + 40; i += 40) {
+        ctx.beginPath(); ctx.moveTo(0, i + offset); ctx.lineTo(width, i + offset); ctx.stroke();
     }
+
+    // Efecto Viento
+    if (windForce !== 0) {
+        ctx.fillStyle = 'rgba(255,255,255,0.05)';
+        for (let i = 0; i < 10; i++) {
+            const wx = (Date.now() * 0.5 + i * 100) % width;
+            ctx.fillRect(wx, (i * height / 10), 50, 2);
+        }
+    }
+
+    blackHoles.forEach(bh => bh.draw());
     platforms.forEach(p => p.draw());
+    powerups.forEach(pu => pu.draw());
     props.forEach(pr => pr.draw());
+    obstacles.forEach(o => o.draw());
     player.draw();
     precisionSystem.draw();
+
+    // UI del Escudo / Powerups
+    if (hasShield) {
+        ctx.strokeStyle = THEME.shield;
+        ctx.lineWidth = 3;
+        ctx.beginPath();
+        ctx.arc(player.x + player.w / 2, player.y + player.h / 2, 35, 0, Math.PI * 2);
+        ctx.stroke();
+    }
+    if (canDoubleJump) {
+        ctx.fillStyle = THEME.doubleJump;
+        ctx.font = "bold 12px Arial";
+        ctx.fillText("2J READY", player.x, player.y - 10);
+    }
+
     particles.forEach(p => {
         ctx.globalAlpha = p.life; ctx.fillStyle = p.color; ctx.fillRect(p.x, p.y, 4, 4);
     });
@@ -536,7 +901,9 @@ function startGame() {
     precisionSystem.spawnBall();
 }
 function endGame() {
-    gameActive = false; finalScore.innerText = score;
+    gameActive = false;
+    finalScore.innerText = score;
+    finalLevel.innerText = level;
     gameOverScreen.classList.remove('hidden');
 }
 
@@ -546,12 +913,125 @@ startBtn.addEventListener('click', startGame);
 restartBtn.addEventListener('click', startGame);
 
 const triggerAction = (e) => {
-    if (e.cancelable) e.preventDefault();
+    // Si item bomba está activo (especial: el juego está pausado)
+    if (bombActive) {
+        // Encontrar si se ha clicado una plataforma
+        const rect = canvas.getBoundingClientRect();
+        const mouseX = (e.clientX || (e.touches ? e.touches[0].clientX : 0)) - rect.left;
+        const mouseY = (e.clientY || (e.touches ? e.touches[0].clientY : 0)) - rect.top;
+
+        const clickedPlatform = platforms.find(p =>
+            !p.isGoal && mouseX > p.x && mouseX < p.x + p.w && mouseY > p.y && mouseY < p.y + p.h
+        );
+
+        if (clickedPlatform) {
+            clickedPlatform.isBroken = true;
+            createExplosion(clickedPlatform.x + clickedPlatform.w / 2, clickedPlatform.y, 1.5);
+            bombActive = false;
+            gameActive = true;
+            showFeedback("¡BOMBA EXPLOTADA!");
+            return;
+        }
+    }
+
     if (!gameActive) return;
+
+    // Si item plataforma está activo (deprecated por la nueva instrucción de ser instantáneo, 
+    // pero lo limpio por si acaso quedaba algo)
+    if (platformItemActive) { platformItemActive = false; }
+
     const precision = precisionSystem.checkHit();
-    if (precision.multiplier > 0) handleJump(precision);
+    if (precision.multiplier > 0) {
+        if (player.onGround) {
+            handleJump(precision);
+        } else if (canDoubleJump && !doubleJumpUsed) {
+            handleJump(precision);
+            doubleJumpUsed = true;
+            canDoubleJump = false; // Se gasta al usarlo
+            showFeedback("¡SALTO DOBLE!");
+        }
+    }
 };
-window.addEventListener('mousedown', triggerAction);
-window.addEventListener('touchstart', triggerAction, { passive: false });
+window.addEventListener('mousedown', (e) => {
+    if (e.target.closest('#shop-fab') || e.target.closest('#shop-modal') || e.target.closest('.inv-slot')) return;
+    triggerAction(e);
+});
+window.addEventListener('touchstart', (e) => {
+    if (e.target.closest('#shop-fab') || e.target.closest('#shop-modal') || e.target.closest('.inv-slot')) return;
+    triggerAction(e);
+}, { passive: false });
+
+// SHOP & INVENTORY LOGIC
+const game = {
+    buyItem(type) {
+        if (score < 1000) { showFeedback("¡PUNTOS INSUFICIENTES!"); return; }
+        if (inventory.length >= 3) { showFeedback("¡INVENTARIO LLENO!"); return; }
+
+        score -= 1000;
+        scoreValue.innerText = score;
+        inventory.push(type);
+        updateInventoryUI();
+        showFeedback("¡COMPRADO: " + type.toUpperCase() + "!");
+    },
+    useItem(index) {
+        if (!inventory[index]) return;
+        const type = inventory[index];
+        inventory.splice(index, 1);
+        updateInventoryUI();
+
+        switch (type) {
+            case 'clock':
+                ballSpeedFactor = 0.5;
+                setTimeout(() => ballSpeedFactor = 1.0, 10000);
+                showFeedback("⏱️ TIEMPO RALENTIZADO!");
+                break;
+            case 'platform':
+                const newP = new Platform(0, player.y + 120, width, 25, false, 'temp_full');
+                newP.vanishingStarted = true; newP.startTime = Date.now();
+                platforms.push(newP);
+                showFeedback("🏗️ PLATAFORMA CREADA!");
+                break;
+            case 'power':
+                greenPowerActive = 5;
+                showFeedback("⚡ ZONA VERDE x5!");
+                break;
+            case 'bomb':
+                bombActive = true;
+                gameActive = false;
+                showFeedback("💣 TOCA UNA PLATAFORMA PARA EXPLOTARLA");
+                break;
+        }
+    }
+};
+
+function updateInventoryUI() {
+    for (let i = 0; i < 3; i++) {
+        const slot = document.getElementById(`slot-${i}`);
+        slot.innerHTML = '';
+        if (inventory[i]) {
+            const icons = { clock: '⏱️', platform: '🏗️', power: '⚡', bomb: '💣' };
+            slot.innerText = icons[inventory[i]];
+            slot.onclick = () => game.useItem(i);
+        } else {
+            slot.onclick = null;
+        }
+    }
+}
+
+const shopInfoBtn = document.getElementById('shop-info-btn');
+const shopHelpOverlay = document.getElementById('shop-help-overlay');
+const closeHelpBtn = document.getElementById('close-help-btn');
+
+shopFab.onclick = () => { gameActive = false; shopModal.classList.remove('hidden'); };
+closeShopBtn.onclick = () => { gameActive = true; shopModal.classList.add('hidden'); };
+
+shopInfoBtn.onclick = () => { shopHelpOverlay.classList.remove('hidden'); };
+closeHelpBtn.onclick = () => { shopHelpOverlay.classList.add('hidden'); };
+
+window.addEventListener('keydown', (e) => {
+    if (e.key === '1') game.useItem(0);
+    if (e.key === '2') game.useItem(1);
+    if (e.key === '3') game.useItem(2);
+});
 
 gameLoop();

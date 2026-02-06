@@ -13,6 +13,11 @@
     <div id="game-container">
         <canvas id="gameCanvas"></canvas>
         <div id="ui-overlay">
+            <div id="inventory-container">
+                <div class="inv-slot" id="slot-0" data-key="1"></div>
+                <div class="inv-slot" id="slot-1" data-key="2"></div>
+                <div class="inv-slot" id="slot-2" data-key="3"></div>
+            </div>
             <div id="level-container" class="hud-item left">
                 <span class="hud-label">NIVEL</span>
                 <span id="level-value">1</span>
@@ -21,8 +26,59 @@
                 <span class="hud-label">PUNTOS</span>
                 <span id="score-value">0</span>
             </div>
+            <div id="shop-fab">🛒</div>
             <div id="msg-overlay" class="hidden">
                 <h2 id="msg-text">EXCELENTE</h2>
+            </div>
+            <div id="shop-modal" class="screen hidden">
+                <div class="glass-card shop-card">
+                    <div id="shop-info-btn">ℹ️</div>
+                    <h2>TIENDA</h2>
+                    <p>Mejora tus habilidades</p>
+                    <div class="shop-grid">
+                        <div class="shop-item" onclick="game.buyItem('clock')">
+                            <span class="item-icon">⏱️</span>
+                            <span class="item-name">Reloj</span>
+                            <span class="item-price">1000 pts</span>
+                        </div>
+                        <div class="shop-item" onclick="game.buyItem('platform')">
+                            <span class="item-icon">🏗️</span>
+                            <span class="item-name">Plataforma</span>
+                            <span class="item-price">1000 pts</span>
+                        </div>
+                        <div class="shop-item" onclick="game.buyItem('power')">
+                            <span class="item-icon">⚡</span>
+                            <span class="item-name">Power</span>
+                            <span class="item-price">1000 pts</span>
+                        </div>
+                        <div class="shop-item" onclick="game.buyItem('bomb')">
+                            <span class="item-icon">💣</span>
+                            <span class="item-name">Bomba</span>
+                            <span class="item-price">1000 pts</span>
+                        </div>
+                    </div>
+                    <button id="close-shop-btn">CERRAR</button>
+
+                    <!-- Overlay de Ayuda dentro de la Tienda -->
+                    <div id="shop-help-overlay" class="hidden">
+                        <div class="glass-card help-card">
+                            <h3>INFORMACIÓN DE OBJETOS</h3>
+                            <div class="help-item">
+                                <strong>⏱️ Reloj:</strong> Ralentiza la bola a la mitad por 10s.
+                            </div>
+                            <div class="help-item">
+                                <strong>🏗️ Plataforma:</strong> Crea un puente de ancho total bajo tus pies.
+                            </div>
+                            <div class="help-item">
+                                <strong>⚡ Power:</strong> Zona verde PERFECT x5 durante 5 turnos.
+                            </div>
+                            <div class="help-item">
+                                <strong>💣 Bomba:</strong> Pausa el juego para explotar una plataforma a elegir.
+                            </div>
+                            <button id="close-help-btn">ENTENDIDO</button>
+                        </div>
+                    </div>
+                </div>
             </div>
             <div id="start-screen" class="screen">
                 <div class="glass-card">
@@ -34,13 +90,15 @@
             <div id="game-over-screen" class="screen hidden">
                 <div class="glass-card">
                     <h2>FIN DEL JUEGO</h2>
-                    <p>Llegaste al Nivel <span id="final-score">0</span></p>
+                    <div class="stats-final">
+                        <p>PUNTUACIÓN: <span id="final-score">0</span></p>
+                        <p>NIVEL ALCANZADO: <span id="final-level">1</span></p>
+                    </div>
                     <button id="restart-btn">REINTENTAR</button>
                 </div>
             </div>
         </div>
-    </div>
-    <script src="game.js"></script>
+        <script src="game.js"></script>
 </body>
 
 </html>
