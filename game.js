@@ -61,6 +61,7 @@ let powerups = [];
 let blackHoles = [];
 let inventory = [];
 let ballSpeedFactor = 1.0;
+let clockTimeoutId = null;
 let greenPowerActive = 0;
 let platformItemActive = false;
 let bombActive = false;
@@ -91,7 +92,7 @@ const player = {
             // Fricción según plataforma
             let friction = 0.85;
             if (this.currentPlatform && this.currentPlatform.type === 'ice') friction = 0.98;
-            if (this.currentPlatform && this.currentPlatform.type === 'sticky') friction = 0;
+            if (this.currentPlatform && (this.currentPlatform.type === 'sticky' || this.currentPlatform.type === 'mini_sticky')) friction = 0;
 
             this.vx *= friction;
             this.rotation = 0;
@@ -113,7 +114,7 @@ const player = {
             const dx = bh.x - (this.x + this.w / 2);
             const dy = bh.y - (this.y + this.h / 2);
             const dist = Math.sqrt(dx * dx + dy * dy);
-            if (dist < bh.radius * 3) {
+            if (dist > 0 && dist < bh.radius * 3) {
                 const force = (1 - dist / (bh.radius * 3)) * 0.5;
                 this.vx += (dx / dist) * force;
                 this.vy += (dy / dist) * force;
@@ -262,9 +263,14 @@ const precisionSystem = {
         ctx.fillRect(tx, ty, tw, th);
 
         const areaY = this.targetArea.y, areaH = this.targetArea.h, centerY = areaY + areaH / 2;
-        const greenH = areaH * this.targetArea.greenScale;
-        const yellowH = areaH * 0.25;
-        const redH = (areaH - greenH - yellowH * 2) / 2;
+        const halfArea = areaH / 2;
+        // Mismos límites que usa checkHit(): greenLimit / yellowLimit relativos a maxDist (=halfArea)
+        const currentGreenScale = greenPowerActive > 0 ? Math.min(1.0, this.targetArea.greenScale * 5) : this.targetArea.greenScale;
+        const greenHalf = halfArea * currentGreenScale;
+        const yellowHalf = Math.max(greenHalf, halfArea * 0.65);
+        const greenH = greenHalf * 2;
+        const yellowH = yellowHalf - greenHalf;
+        const redH = Math.max(0, halfArea - yellowHalf);
 
         const drawBand = (y, h, color, glow) => {
             if (glow) { ctx.shadowBlur = 15; ctx.shadowColor = color; }
@@ -478,9 +484,9 @@ class Platform {
         }
 
         // Desvanecimiento / Rotura...
-        if ((this.type === 'vanishing' || this.type === 'fragile') && this.vanishingStarted) {
+        if ((this.type === 'vanishing' || this.type === 'fragile' || this.type === 'temp_full') && this.vanishingStarted) {
             const elapsed = Date.now() - this.startTime;
-            const duration = this.type === 'vanishing' ? 5000 : 1500;
+            const duration = this.type === 'vanishing' ? 5000 : (this.type === 'temp_full' ? 8000 : 1500);
             this.alpha = Math.max(0, 1 - (elapsed / duration));
             if (elapsed >= duration) {
                 this.isBroken = true;
@@ -598,6 +604,7 @@ function initPlatforms() {
     hasShield = false; canDoubleJump = false; doubleJumpUsed = false;
     inventory = []; updateInventoryUI();
     ballSpeedFactor = 1.0; greenPowerActive = 0; platformItemActive = false; bombActive = false;
+    if (clockTimeoutId) { clearTimeout(clockTimeoutId); clockTimeoutId = null; }
 
     levelValue.innerText = level;
     scoreValue.innerText = score;
@@ -624,10 +631,13 @@ function spawnNextPlatform(forceGoal = false) {
     let type = 'normal';
     if (!forceGoal) {
         const rand = Math.random();
-        if (level >= 5 && rand < 0.2) type = 'moving';
-        else if (level >= 10 && rand < 0.35) type = (Math.random() > 0.5 ? 'ice' : 'sticky');
-        else if (level >= 20 && rand < 0.5) type = 'fragile';
-        else if (totalPlatformGlobalCount % 10 === 0) type = 'vanishing';
+        if (totalPlatformGlobalCount % 10 === 0) type = 'vanishing';
+        else if (level >= 25 && rand < 0.06) type = 'flash';
+        else if (level >= 20 && rand < 0.14) type = 'fragile';
+        else if (level >= 14 && rand < 0.22) type = 'mini_sticky';
+        else if (level >= 10 && rand < 0.32) type = (Math.random() > 0.5 ? 'ice' : 'sticky');
+        else if (level >= 8 && rand < 0.40) type = 'spring';
+        else if (level >= 5 && rand < 0.55) type = 'moving';
     }
 
     const platform = new Platform(nextX, nextY, nextW, 20, forceGoal, type);
@@ -741,11 +751,13 @@ function checkCollisions() {
     player.onGround = false;
 
     // Colisión Jugador con Obstáculos
+    let shieldConsumedThisFrame = false;
     obstacles.forEach(obs => {
         if (player.x + player.w > obs.x && player.x < obs.x + obs.w &&
             player.y + player.h > obs.y && player.y < obs.y + obs.h) {
-            if (hasShield) {
-                useShield();
+            if (hasShield || shieldConsumedThisFrame) {
+                if (hasShield) useShield();
+                shieldConsumedThisFrame = true;
                 obs.x = -1000; // Eliminar obstáculo
             } else {
                 endGame();
@@ -769,16 +781,24 @@ function checkCollisions() {
     props.forEach(prop => {
         if (player.x + player.w > prop.x && player.x < prop.x + prop.w &&
             player.y + player.h > prop.y && player.y < prop.y + prop.h) {
-            const playerCenterX = player.x + player.w / 2;
-            const propCenterX = prop.x + prop.w / 2;
-            const force = (player.vx || (propCenterX > playerCenterX ? 2 : -2));
-            prop.vx += force * 0.5;
-            prop.vy -= 2;
+            const now = Date.now();
+            if (!prop.lastHitTime || now - prop.lastHitTime > 300) {
+                prop.lastHitTime = now;
+                const playerCenterX = player.x + player.w / 2;
+                const propCenterX = prop.x + prop.w / 2;
+                const force = (player.vx || (propCenterX > playerCenterX ? 2 : -2));
+                prop.vx += force * 0.5;
+                prop.vy -= 2;
+                // Límite de velocidad para que no salgan disparadas sin control
+                prop.vx = Math.max(-12, Math.min(12, prop.vx));
+                prop.vy = Math.max(-12, Math.min(12, prop.vy));
+            }
         }
     });
 
     // Colisión Jugador con Plataformas
     platforms.forEach(p => {
+        if (p.type === 'flash' && !p.isVisible) return; // "apagada": el jugador la atraviesa
         if (player.vy >= 0 && player.x + player.w > p.x && player.x < p.x + p.w &&
             player.y + player.h >= p.y && player.y + player.h <= p.y + p.h + 10) {
 
@@ -795,6 +815,17 @@ function checkCollisions() {
                 if ((p.type === 'vanishing' || p.type === 'fragile') && !p.vanishingStarted) {
                     p.vanishingStarted = true;
                     p.startTime = Date.now();
+                }
+                if (p.type === 'spring') {
+                    // Resorte: rebote automático hacia arriba, no requiere precisión del jugador
+                    const distY = 220;
+                    player.vy = -Math.sqrt(2 * player.gravity * distY) * 1.4;
+                    player.vx *= 0.3;
+                    player.onGround = false;
+                    player.angularVelocity = 0.25;
+                    doubleJumpUsed = false;
+                    showFeedback("¡RESORTE! 🚀");
+                    createExplosion(p.x + p.w / 2, p.y, 0.8);
                 }
                 if (p.isGoal) nextLevel();
             }
@@ -958,6 +989,7 @@ window.addEventListener('mousedown', (e) => {
 });
 window.addEventListener('touchstart', (e) => {
     if (e.target.closest('#shop-fab') || e.target.closest('#shop-modal') || e.target.closest('.inv-slot')) return;
+    e.preventDefault();
     triggerAction(e);
 }, { passive: false });
 
@@ -982,7 +1014,8 @@ const game = {
         switch (type) {
             case 'clock':
                 ballSpeedFactor = 0.5;
-                setTimeout(() => ballSpeedFactor = 1.0, 10000);
+                if (clockTimeoutId) clearTimeout(clockTimeoutId);
+                clockTimeoutId = setTimeout(() => { ballSpeedFactor = 1.0; clockTimeoutId = null; }, 10000);
                 showFeedback("⏱️ TIEMPO RALENTIZADO!");
                 break;
             case 'platform':
