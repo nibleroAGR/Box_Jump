@@ -140,6 +140,7 @@
                         <p>NIVEL ALCANZADO: <span id="final-level">1</span></p>
                     </div>
                     <button id="restart-btn">REINTENTAR</button>
+                    <button id="game-over-new-btn" class="secondary-btn hidden">EMPEZAR DE NUEVO</button>
                 </div>
             </div>
         </div>
@@ -148,7 +149,8 @@
         <script type="module">
             import { initializeApp } from "https://www.gstatic.com/firebasejs/12.12.1/firebase-app.js";
             import {
-                getAuth, GoogleAuthProvider, signInWithPopup, signOut, onAuthStateChanged
+                getAuth, GoogleAuthProvider, signInWithPopup, signInWithRedirect,
+                getRedirectResult, signOut, onAuthStateChanged
             } from "https://www.gstatic.com/firebasejs/12.12.1/firebase-auth.js";
             import {
                 getFirestore, doc, getDoc, setDoc, updateDoc, arrayUnion,
@@ -169,6 +171,14 @@
             const auth = getAuth(app);
             const db = getFirestore(app);
             const provider = new GoogleAuthProvider();
+
+            // Las tablets/móviles suelen bloquear o fallar con signInWithPopup
+            // (pop-up blockers, navegadores in-app, Safari con ITP, etc.),
+            // así que en pantallas táctiles usamos signInWithRedirect directamente.
+            const isTouchDevice = (
+                /Android|iPhone|iPad|iPod|Tablet|Mobile/i.test(navigator.userAgent) ||
+                (navigator.maxTouchPoints && navigator.maxTouchPoints > 1)
+            );
 
             let currentUser = null;
             let activeTab = 'global';
@@ -292,11 +302,42 @@
             });
 
             googleBtn.addEventListener('click', async () => {
+                googleBtn.disabled = true;
                 try {
+                    if (isTouchDevice) {
+                        await signInWithRedirect(auth, provider);
+                        return; // la página se recargará al volver de Google
+                    }
                     await signInWithPopup(auth, provider);
                 } catch (e) {
-                    console.error('Error al iniciar sesión:', e);
+                    console.error('Error al iniciar sesión (popup):', e);
+                    const popupIssue = [
+                        'auth/popup-blocked',
+                        'auth/popup-closed-by-user',
+                        'auth/cancelled-popup-request',
+                        'auth/operation-not-supported-in-this-environment',
+                    ].includes(e.code);
+                    if (popupIssue) {
+                        // Fallback: si el popup falla o el navegador no lo soporta bien,
+                        // reintentamos con redirect.
+                        try {
+                            await signInWithRedirect(auth, provider);
+                            return;
+                        } catch (e2) {
+                            console.error('Error al iniciar sesión (redirect):', e2);
+                        }
+                    }
                     alert('No se pudo iniciar sesión con Google. Inténtalo de nuevo.');
+                } finally {
+                    googleBtn.disabled = false;
+                }
+            });
+
+            // Al volver de Google tras un signInWithRedirect, recuperamos el resultado
+            getRedirectResult(auth).catch((e) => {
+                console.error('Error al completar el inicio de sesión con redirect:', e);
+                if (e && e.code && e.code !== 'auth/no-auth-event') {
+                    alert('No se pudo completar el inicio de sesión con Google. Inténtalo de nuevo.');
                 }
             });
 

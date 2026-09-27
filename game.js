@@ -12,6 +12,7 @@ const finalLevel = document.getElementById('final-level');
 const startBtn = document.getElementById('start-btn');
 const newGameBtn = document.getElementById('new-game-btn');
 const restartBtn = document.getElementById('restart-btn');
+const gameOverNewBtn = document.getElementById('game-over-new-btn');
 const rankingFab = document.getElementById('ranking-fab');
 const startScreen = document.getElementById('start-screen');
 const gameOverScreen = document.getElementById('game-over-screen');
@@ -47,13 +48,18 @@ if (bestValueEl) bestValueEl.innerText = bestScore;
 let savedGameData = null;
 
 function updateStartScreenUI() {
+    const hasCheckpoint = !!(savedGameData && savedGameData.level > 1);
     if (startBtn) {
-        startBtn.innerText = (savedGameData && savedGameData.level > 1)
-            ? `CONTINUAR (Nivel ${savedGameData.level})`
-            : 'EMPEZAR';
+        startBtn.innerText = hasCheckpoint ? `CONTINUAR (Nivel ${savedGameData.level})` : 'EMPEZAR';
     }
     if (newGameBtn) {
-        newGameBtn.classList.toggle('hidden', !(savedGameData && savedGameData.level > 1));
+        newGameBtn.classList.toggle('hidden', !hasCheckpoint);
+    }
+    if (restartBtn) {
+        restartBtn.innerText = hasCheckpoint ? `CONTINUAR (Nivel ${savedGameData.level})` : 'REINTENTAR';
+    }
+    if (gameOverNewBtn) {
+        gameOverNewBtn.classList.toggle('hidden', !hasCheckpoint);
     }
 }
 
@@ -744,6 +750,10 @@ function nextLevel() {
     // Guardado automático cada 5 niveles (checkpoint)
     if (level % 5 === 0 && window.BJFirebase && window.BJFirebase.isSignedIn()) {
         window.BJFirebase.saveProgress(score, level);
+        // Actualizamos el estado local al instante: no hace falta esperar a
+        // un nuevo evento de login para poder "continuar" desde aquí.
+        savedGameData = { score, level };
+        updateStartScreenUI();
     }
 
     const current = player.currentPlatform;
@@ -1012,6 +1022,7 @@ function endGame() {
     finalLevel.innerText = level;
     gameOverScreen.classList.remove('hidden');
     if (rankingFab) rankingFab.classList.add('hidden');
+    updateStartScreenUI();
     if (window.BJFirebase) window.BJFirebase.reportScore(score, level);
 }
 
@@ -1046,7 +1057,8 @@ window.addEventListener('resize', resize);
 resize();
 startBtn.addEventListener('click', () => startGame(true));
 if (newGameBtn) newGameBtn.addEventListener('click', () => startGame(false));
-restartBtn.addEventListener('click', () => startGame(false));
+restartBtn.addEventListener('click', () => startGame(true));
+if (gameOverNewBtn) gameOverNewBtn.addEventListener('click', () => startGame(false));
 
 const triggerAction = (e) => {
     // Si item bomba está activo (especial: el juego está pausado)
