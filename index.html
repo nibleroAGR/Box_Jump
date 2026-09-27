@@ -115,6 +115,7 @@
                         <button id="google-signin-btn" class="google-btn">
                             <span class="google-icon">G</span> Conectar con Google
                         </button>
+                        <p id="auth-debug-msg" class="auth-hint hidden" style="color:#ff6b6b;"></p>
                     </div>
                     <div id="profile-block" class="hidden">
                         <img id="profile-avatar" alt="avatar" />
@@ -171,10 +172,24 @@
             const auth = getAuth(app);
             const db = getFirestore(app);
             const provider = new GoogleAuthProvider();
+            const authDebugMsg = document.getElementById('auth-debug-msg');
+
+            function showAuthDebug(text) {
+                if (!authDebugMsg) return;
+                authDebugMsg.innerText = text;
+                authDebugMsg.classList.remove('hidden');
+            }
+
+            // ¿Esta página está cargada dentro de un iframe? Si es así,
+            // signInWithRedirect no funciona (Google no permite el login
+            // embebido en un frame), así que en ese caso forzamos popup.
+            let inIframe = false;
+            try { inIframe = window.self !== window.top; } catch (e) { inIframe = true; }
 
             // Las tablets/móviles suelen bloquear o fallar con signInWithPopup
             // (pop-up blockers, navegadores in-app, Safari con ITP, etc.),
-            // así que en pantallas táctiles usamos signInWithRedirect directamente.
+            // así que en pantallas táctiles usamos signInWithRedirect directamente
+            // (salvo que estemos dentro de un iframe, donde el redirect no sirve).
             const isTouchDevice = (
                 /Android|iPhone|iPad|iPod|Tablet|Mobile/i.test(navigator.userAgent) ||
                 (navigator.maxTouchPoints && navigator.maxTouchPoints > 1)
@@ -303,8 +318,12 @@
 
             googleBtn.addEventListener('click', async () => {
                 googleBtn.disabled = true;
+                authDebugMsg.classList.add('hidden');
                 try {
-                    if (isTouchDevice) {
+                    if (inIframe) {
+                        showAuthDebug('Esta página está embebida en un iframe: abre el enlace directamente en una pestaña del navegador para poder iniciar sesión con Google.');
+                    }
+                    if (isTouchDevice && !inIframe) {
                         await signInWithRedirect(auth, provider);
                         return; // la página se recargará al volver de Google
                     }
@@ -317,17 +336,22 @@
                         'auth/cancelled-popup-request',
                         'auth/operation-not-supported-in-this-environment',
                     ].includes(e.code);
-                    if (popupIssue) {
+                    if (popupIssue && !inIframe) {
                         // Fallback: si el popup falla o el navegador no lo soporta bien,
-                        // reintentamos con redirect.
+                        // reintentamos con redirect (solo tiene sentido fuera de un iframe).
                         try {
                             await signInWithRedirect(auth, provider);
                             return;
                         } catch (e2) {
                             console.error('Error al iniciar sesión (redirect):', e2);
+                            showAuthDebug(`Error: ${e2.code || ''} ${e2.message || e2}`);
                         }
+                    } else {
+                        showAuthDebug(`Error: ${e.code || ''} ${e.message || e}`);
                     }
-                    alert('No se pudo iniciar sesión con Google. Inténtalo de nuevo.');
+                    if (!authDebugMsg.innerText) {
+                        alert('No se pudo iniciar sesión con Google. Inténtalo de nuevo.');
+                    }
                 } finally {
                     googleBtn.disabled = false;
                 }
@@ -337,7 +361,7 @@
             getRedirectResult(auth).catch((e) => {
                 console.error('Error al completar el inicio de sesión con redirect:', e);
                 if (e && e.code && e.code !== 'auth/no-auth-event') {
-                    alert('No se pudo completar el inicio de sesión con Google. Inténtalo de nuevo.');
+                    showAuthDebug(`Error al volver de Google: ${e.code || ''} ${e.message || e}`);
                 }
             });
 
