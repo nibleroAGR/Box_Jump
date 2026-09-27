@@ -854,7 +854,10 @@ function update() {
 
     for (let i = platforms.length - 1; i >= 0; i--) {
         if (!platforms[i].update()) {
-            if (player.currentPlatform === platforms[i]) player.onGround = false;
+            if (player.currentPlatform === platforms[i]) {
+                player.onGround = false;
+                player.currentPlatform = null;
+            }
             platforms.splice(i, 1);
         }
     }
