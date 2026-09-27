@@ -6,7 +6,7 @@
     <meta name="viewport"
         content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
     <title>Box Jump Precision</title>
-    <link rel="stylesheet" href="style.css?v=3">
+    <link rel="stylesheet" href="style.css?v=4">
 </head>
 
 <body>
@@ -145,7 +145,7 @@
                 </div>
             </div>
         </div>
-        <script src="game.js?v=3"></script>
+        <script src="game.js?v=4"></script>
 
         <script type="module">
             import { initializeApp } from "https://www.gstatic.com/firebasejs/12.12.1/firebase-app.js";
@@ -182,18 +182,9 @@
 
             // ¿Esta página está cargada dentro de un iframe? Si es así,
             // signInWithRedirect no funciona (Google no permite el login
-            // embebido en un frame), así que en ese caso forzamos popup.
+            // embebido en un frame).
             let inIframe = false;
             try { inIframe = window.self !== window.top; } catch (e) { inIframe = true; }
-
-            // Las tablets/móviles suelen bloquear o fallar con signInWithPopup
-            // (pop-up blockers, navegadores in-app, Safari con ITP, etc.),
-            // así que en pantallas táctiles usamos signInWithRedirect directamente
-            // (salvo que estemos dentro de un iframe, donde el redirect no sirve).
-            const isTouchDevice = (
-                /Android|iPhone|iPad|iPod|Tablet|Mobile/i.test(navigator.userAgent) ||
-                (navigator.maxTouchPoints && navigator.maxTouchPoints > 1)
-            );
 
             let currentUser = null;
             let activeTab = 'global';
@@ -320,13 +311,8 @@
                 googleBtn.disabled = true;
                 try {
                     authDebugMsg.classList.add('hidden');
-                    if (inIframe) {
-                        showAuthDebug('Esta página está embebida en un iframe: abre el enlace directamente en una pestaña del navegador para poder iniciar sesión con Google.');
-                    }
-                    if (isTouchDevice && !inIframe) {
-                        await signInWithRedirect(auth, provider);
-                        return; // la página se recargará al volver de Google
-                    }
+                    // Popup primero SIEMPRE (funciona igual en PC y en la
+                    // mayoría de móviles/tablets modernos con Chrome real).
                     await signInWithPopup(auth, provider);
                 } catch (e) {
                     console.error('Error al iniciar sesión (popup):', e);
@@ -337,8 +323,8 @@
                         'auth/operation-not-supported-in-this-environment',
                     ].includes(e.code);
                     if (popupIssue && !inIframe) {
-                        // Fallback: si el popup falla o el navegador no lo soporta bien,
-                        // reintentamos con redirect (solo tiene sentido fuera de un iframe).
+                        // Solo si el navegador rechaza explícitamente el popup
+                        // probamos con redirect (no sirve dentro de un iframe).
                         try {
                             await signInWithRedirect(auth, provider);
                             return;
@@ -349,15 +335,12 @@
                     } else {
                         showAuthDebug(`Error: ${e.code || ''} ${e.message || e}`);
                     }
-                    if (!authDebugMsg.innerText) {
-                        alert('No se pudo iniciar sesión con Google. Inténtalo de nuevo.');
-                    }
                 } finally {
                     googleBtn.disabled = false;
                 }
             });
 
-            // Al volver de Google tras un signInWithRedirect, recuperamos el resultado
+            // Al volver de Google tras un signInWithRedirect (fallback), recuperamos el resultado
             getRedirectResult(auth).catch((e) => {
                 console.error('Error al completar el inicio de sesión con redirect:', e);
                 if (e && e.code && e.code !== 'auth/no-auth-event') {
