@@ -6,55 +6,7 @@
     <meta name="viewport"
         content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
     <title>Box Jump Precision</title>
-    <link rel="stylesheet" href="style.css?v=7">
-    <script>
-        // --- Consola de depuración propia (sin CDN externo) ---
-        // Se activa añadiendo ?debug=1 a la URL. Muestra en pantalla cualquier
-        // error de JS, promesa no controlada, o mensaje que enviemos con debugLog().
-        // Los mensajes que lleguen ANTES de que exista el panel visual se guardan
-        // en cola y se muestran en cuanto el panel está listo (nada se pierde).
-        window.__debugOn = location.search.includes('debug=1');
-        window.__debugQueue = [];
-        function __appendDebugLine(text) {
-            var box = document.getElementById('debug-console');
-            if (!box) { window.__debugQueue.push(text); return; }
-            var line = document.createElement('div');
-            line.style.borderBottom = '1px solid #333';
-            line.style.padding = '2px 0';
-            line.textContent = text;
-            box.appendChild(line);
-            box.scrollTop = box.scrollHeight;
-        }
-        window.debugLog = function (msg) {
-            try {
-                console.log(msg);
-                if (!window.__debugOn) return;
-                __appendDebugLine('[' + new Date().toLocaleTimeString() + '] ' + msg);
-            } catch (e) { /* no-op */ }
-        };
-        // Log inmediato, antes de esperar a DOMContentLoaded, por si el propio
-        // parseo del HTML o un script muy temprano falla.
-        if (window.__debugOn) debugLog('Cabecera de la página cargada. Versión: v7');
-        window.addEventListener('DOMContentLoaded', function () {
-            if (!window.__debugOn) return;
-            var box = document.createElement('div');
-            box.id = 'debug-console';
-            box.style.cssText = 'position:fixed;left:0;right:0;bottom:0;height:35vh;background:rgba(0,0,0,0.92);color:#0f0;font:11px monospace;overflow-y:auto;z-index:99999;padding:6px;box-sizing:border-box;-webkit-overflow-scrolling:touch;';
-            document.body.appendChild(box);
-            // Volcamos todo lo que se haya quedado en cola antes de que existiera el panel
-            var queued = window.__debugQueue || [];
-            window.__debugQueue = [];
-            queued.forEach(function (t) { __appendDebugLine(t); });
-            debugLog('DOMContentLoaded disparado (el panel ya está listo).');
-        });
-        // Captura cualquier error de JS (incluido fallo al cargar un script externo)
-        window.addEventListener('error', function (e) {
-            debugLog('ERROR JS: ' + (e.message || (e.target && e.target.src ? 'fallo cargando ' + e.target.src : 'desconocido')));
-        }, true);
-        window.addEventListener('unhandledrejection', function (e) {
-            debugLog('PROMESA SIN CAPTURAR: ' + (e.reason && (e.reason.code || e.reason.message || e.reason)));
-        });
-    </script>
+    <link rel="stylesheet" href="style.css?v=8">
 </head>
 
 <body>
@@ -193,10 +145,9 @@
                 </div>
             </div>
         </div>
-        <script src="game.js?v=7"></script>
+        <script src="game.js?v=8"></script>
 
         <script type="module">
-            if (window.debugLog) debugLog('Script módulo (Firebase) empezando a ejecutarse...');
             import { initializeApp } from "https://www.gstatic.com/firebasejs/12.12.1/firebase-app.js";
             import {
                 getAuth, GoogleAuthProvider, signInWithPopup, signInWithRedirect,
@@ -222,7 +173,6 @@
             const db = getFirestore(app);
             const provider = new GoogleAuthProvider();
             const authDebugMsg = document.getElementById('auth-debug-msg');
-            if (window.debugLog) debugLog('Módulo Firebase cargado y auth inicializado correctamente.');
 
             function showAuthDebug(text) {
                 if (!authDebugMsg) return;
@@ -358,17 +308,14 @@
             });
 
             googleBtn.addEventListener('click', async () => {
-                if (window.debugLog) debugLog('Botón "Conectar con Google" pulsado.');
                 googleBtn.disabled = true;
                 try {
                     authDebugMsg.classList.add('hidden');
                     // Popup primero SIEMPRE (funciona igual en PC y en la
                     // mayoría de móviles/tablets modernos con Chrome real).
                     await signInWithPopup(auth, provider);
-                    if (window.debugLog) debugLog('signInWithPopup completado con éxito.');
                 } catch (e) {
                     console.error('Error al iniciar sesión (popup):', e);
-                    if (window.debugLog) debugLog('signInWithPopup falló: ' + (e.code || '') + ' ' + (e.message || e));
                     const popupIssue = [
                         'auth/popup-blocked',
                         'auth/popup-closed-by-user',
