@@ -612,6 +612,11 @@ function initPlatforms() {
     platforms.push(new Platform(width / 2 - 50, height - 150, 100, 20));
     player.x = width / 2 - player.w / 2;
     player.y = height - 150 - player.h;
+    player.vx = 0;
+    player.vy = 0;
+    player.rotation = 0;
+    player.angularVelocity = 0;
+    player.onGround = true;
     player.currentPlatform = platforms[0];
     for (let i = 1; i < platformsInLevel; i++) {
         spawnNextPlatform(i === platformsInLevel - 1);
