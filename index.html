@@ -145,19 +145,16 @@
                 </div>
             </div>
         </div>
-        <script src="game.js?v=8"></script>
+        <script src="game.js?v=9"></script>
 
-        <script type="module">
-            import { initializeApp } from "https://www.gstatic.com/firebasejs/12.12.1/firebase-app.js";
-            import {
-                getAuth, GoogleAuthProvider, signInWithPopup, signInWithRedirect,
-                getRedirectResult, signOut, onAuthStateChanged
-            } from "https://www.gstatic.com/firebasejs/12.12.1/firebase-auth.js";
-            import {
-                getFirestore, doc, getDoc, setDoc, updateDoc, arrayUnion,
-                collection, query, where, orderBy, limit, getDocs, serverTimestamp
-            } from "https://www.gstatic.com/firebasejs/12.12.1/firebase-firestore.js";
+        <!-- SDK "compat" de Firebase: archivos únicos clásicos (sin import/export
+             encadenados), mucho más tolerantes en navegadores/dispositivos raros
+             que la versión modular moderna. -->
+        <script src="https://www.gstatic.com/firebasejs/10.13.2/firebase-app-compat.js"></script>
+        <script src="https://www.gstatic.com/firebasejs/10.13.2/firebase-auth-compat.js"></script>
+        <script src="https://www.gstatic.com/firebasejs/10.13.2/firebase-firestore-compat.js"></script>
 
+        <script>
             const firebaseConfig = {
                 apiKey: "AIzaSyDe0IgL9f9s_2YbuFNBIEGsUW23YCdr-SE",
                 authDomain: "boxjump-629c3.firebaseapp.com",
@@ -168,10 +165,10 @@
                 measurementId: "G-RZ45FWBDWY"
             };
 
-            const app = initializeApp(firebaseConfig);
-            const auth = getAuth(app);
-            const db = getFirestore(app);
-            const provider = new GoogleAuthProvider();
+            firebase.initializeApp(firebaseConfig);
+            const auth = firebase.auth();
+            const db = firebase.firestore();
+            const provider = new firebase.auth.GoogleAuthProvider();
             const authDebugMsg = document.getElementById('auth-debug-msg');
 
             function showAuthDebug(text) {
@@ -225,8 +222,7 @@
                 while (true) {
                     const testName = suffix === 0 ? candidate : `${candidate}${suffix}`;
                     try {
-                        const q = query(collection(db, 'users'), where('username', '==', testName));
-                        const snap = await getDocs(q);
+                        const snap = await db.collection('users').where('username', '==', testName).get();
                         const takenByOther = snap.docs.some(d => d.id !== currentUid);
                         if (!takenByOther) return testName;
                     } catch (e) {
@@ -239,9 +235,9 @@
 
             // Crea el documento del usuario en Firestore si es la primera vez que entra
             async function ensureUserDoc(user) {
-                const ref = doc(db, 'users', user.uid);
-                const snap = await getDoc(ref);
-                if (!snap.exists()) {
+                const ref = db.collection('users').doc(user.uid);
+                const snap = await ref.get();
+                if (!snap.exists) {
                     const uniqueUsername = await ensureUniqueUsername(user.displayName || 'Jugador', user.uid);
                     const initial = {
                         displayName: user.displayName || 'Jugador',
@@ -251,10 +247,10 @@
                         bestLevel: 1,
                         friends: [],
                         savedGame: null,
-                        createdAt: serverTimestamp(),
-                        updatedAt: serverTimestamp(),
+                        createdAt: firebase.firestore.FieldValue.serverTimestamp(),
+                        updatedAt: firebase.firestore.FieldValue.serverTimestamp(),
                     };
-                    await setDoc(ref, initial);
+                    await ref.set(initial);
                     return initial;
                 }
                 // Mantener nombre/foto de Google sincronizados, pero respetar el
@@ -267,11 +263,11 @@
                 if (!data.username) {
                     patch.username = await ensureUniqueUsername(user.displayName || 'Jugador', user.uid);
                 }
-                await updateDoc(ref, patch);
+                await ref.update(patch);
                 return { ...data, ...patch };
             }
 
-            onAuthStateChanged(auth, async (user) => {
+            auth.onAuthStateChanged(async (user) => {
                 currentUser = user;
                 if (user) {
                     loginBlock.classList.add('hidden');
@@ -313,7 +309,7 @@
                     authDebugMsg.classList.add('hidden');
                     // Popup primero SIEMPRE (funciona igual en PC y en la
                     // mayoría de móviles/tablets modernos con Chrome real).
-                    await signInWithPopup(auth, provider);
+                    await auth.signInWithPopup(provider);
                 } catch (e) {
                     console.error('Error al iniciar sesión (popup):', e);
                     const popupIssue = [
@@ -326,7 +322,7 @@
                         // Solo si el navegador rechaza explícitamente el popup
                         // probamos con redirect (no sirve dentro de un iframe).
                         try {
-                            await signInWithRedirect(auth, provider);
+                            await auth.signInWithRedirect(provider);
                             return;
                         } catch (e2) {
                             console.error('Error al iniciar sesión (redirect):', e2);
@@ -341,7 +337,7 @@
             });
 
             // Al volver de Google tras un signInWithRedirect (fallback), recuperamos el resultado
-            getRedirectResult(auth).catch((e) => {
+            auth.getRedirectResult().catch((e) => {
                 console.error('Error al completar el inicio de sesión con redirect:', e);
                 if (e && e.code && e.code !== 'auth/no-auth-event') {
                     showAuthDebug(`Error al volver de Google: ${e.code || ''} ${e.message || e}`);
@@ -349,22 +345,22 @@
             });
 
             signoutBtn.addEventListener('click', async () => {
-                try { await signOut(auth); } catch (e) { console.error(e); }
+                try { await auth.signOut(); } catch (e) { console.error(e); }
             });
 
             async function reportScore(score, level) {
                 if (!currentUser) return;
                 try {
-                    const ref = doc(db, 'users', currentUser.uid);
-                    const snap = await getDoc(ref);
-                    const data = snap.exists() ? snap.data() : { bestScore: 0, bestLevel: 1 };
+                    const ref = db.collection('users').doc(currentUser.uid);
+                    const snap = await ref.get();
+                    const data = snap.exists ? snap.data() : { bestScore: 0, bestLevel: 1 };
                     if (score > (data.bestScore || 0)) {
-                        await updateDoc(ref, {
+                        await ref.update({
                             bestScore: score,
                             bestLevel: Math.max(level, data.bestLevel || 1),
                             displayName: currentUser.displayName || 'Jugador',
                             photoURL: currentUser.photoURL || '',
-                            updatedAt: serverTimestamp(),
+                            updatedAt: firebase.firestore.FieldValue.serverTimestamp(),
                         });
                     }
                 } catch (e) {
@@ -376,7 +372,7 @@
             async function saveProgress(score, level) {
                 if (!currentUser) return;
                 try {
-                    await updateDoc(doc(db, 'users', currentUser.uid), {
+                    await db.collection('users').doc(currentUser.uid).update({
                         savedGame: { score, level, updatedAt: Date.now() },
                     });
                 } catch (e) {
@@ -385,21 +381,20 @@
             }
 
             async function getTopUsers(n = 20) {
-                const q = query(collection(db, 'users'), orderBy('bestScore', 'desc'), limit(n));
-                const snap = await getDocs(q);
+                const snap = await db.collection('users').orderBy('bestScore', 'desc').limit(n).get();
                 return snap.docs.map(d => ({ uid: d.id, ...d.data() }));
             }
 
             async function getFriendsTop() {
                 if (!currentUser) return [];
-                const mySnap = await getDoc(doc(db, 'users', currentUser.uid));
-                const myData = mySnap.exists() ? mySnap.data() : { friends: [], bestScore: 0 };
+                const mySnap = await db.collection('users').doc(currentUser.uid).get();
+                const myData = mySnap.exists ? mySnap.data() : { friends: [], bestScore: 0 };
                 const friendUids = myData.friends || [];
                 const results = [{ uid: currentUser.uid, ...myData }];
                 for (const fid of friendUids) {
                     try {
-                        const fSnap = await getDoc(doc(db, 'users', fid));
-                        if (fSnap.exists()) results.push({ uid: fid, ...fSnap.data() });
+                        const fSnap = await db.collection('users').doc(fid).get();
+                        if (fSnap.exists) results.push({ uid: fid, ...fSnap.data() });
                     } catch (e) { /* amigo no encontrado o sin permiso: se omite */ }
                 }
                 results.sort((a, b) => (b.bestScore || 0) - (a.bestScore || 0));
@@ -411,9 +406,11 @@
                 if (!clean || !currentUser) return { ok: false, msg: 'Código vacío' };
                 if (clean === currentUser.uid) return { ok: false, msg: 'No puedes añadirte a ti mismo' };
                 try {
-                    const fSnap = await getDoc(doc(db, 'users', clean));
-                    if (!fSnap.exists()) return { ok: false, msg: 'No existe ningún jugador con ese código' };
-                    await updateDoc(doc(db, 'users', currentUser.uid), { friends: arrayUnion(clean) });
+                    const fSnap = await db.collection('users').doc(clean).get();
+                    if (!fSnap.exists) return { ok: false, msg: 'No existe ningún jugador con ese código' };
+                    await db.collection('users').doc(currentUser.uid).update({
+                        friends: firebase.firestore.FieldValue.arrayUnion(clean),
+                    });
                     return { ok: true };
                 } catch (e) {
                     console.error(e);
@@ -511,7 +508,7 @@
                 saveUsernameBtn.disabled = true;
                 try {
                     const unique = await ensureUniqueUsername(requested, currentUser.uid);
-                    await updateDoc(doc(db, 'users', currentUser.uid), { username: unique });
+                    await db.collection('users').doc(currentUser.uid).update({ username: unique });
                     profileName.innerText = unique;
                     if (unique !== requested) {
                         alert(`Ese nombre ya estaba en uso. Se ha asignado "${unique}".`);
@@ -530,7 +527,7 @@
                 if (e.key === 'Enter') submitUsername();
             });
 
-            // API expuesta para game.js (script clásico, no-módulo)
+            // API expuesta para game.js
             window.BJFirebase = {
                 isSignedIn: () => !!currentUser,
                 promptSignIn: () => { googleBtn.click(); },
