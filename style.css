@@ -317,8 +317,52 @@ canvas {
 #profile-name {
     font-weight: 700;
     font-size: 1rem;
-    margin-bottom: 0.5rem;
     color: rgba(255, 255, 255, 0.9);
+}
+
+#username-row {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    margin-bottom: 0.5rem;
+}
+
+.icon-btn {
+    all: unset;
+    cursor: pointer;
+    font-size: 0.9rem;
+    opacity: 0.7;
+    transition: opacity 0.2s, transform 0.2s;
+}
+
+.icon-btn:hover {
+    opacity: 1;
+    transform: scale(1.15);
+}
+
+#username-edit-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 0.5rem;
+}
+
+#username-input {
+    flex: 1;
+    background: var(--glass);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 0.5rem 0.7rem;
+    color: #fff;
+    font-size: 0.85rem;
+}
+
+#save-username-btn {
+    width: auto;
+    margin-top: 0;
+    padding: 0.5rem 0.9rem;
+    font-size: 0.85rem;
 }
 
 .secondary-btn {

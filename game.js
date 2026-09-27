@@ -10,7 +10,9 @@ const levelValue = document.getElementById('level-value');
 const finalScore = document.getElementById('final-score');
 const finalLevel = document.getElementById('final-level');
 const startBtn = document.getElementById('start-btn');
+const newGameBtn = document.getElementById('new-game-btn');
 const restartBtn = document.getElementById('restart-btn');
+const rankingFab = document.getElementById('ranking-fab');
 const startScreen = document.getElementById('start-screen');
 const gameOverScreen = document.getElementById('game-over-screen');
 const msgOverlay = document.getElementById('msg-overlay');
@@ -40,6 +42,20 @@ try {
     bestScore = parseInt(localStorage.getItem('boxjump_best_score'), 10) || 0;
 } catch (e) { bestScore = 0; }
 if (bestValueEl) bestValueEl.innerText = bestScore;
+
+// Partida guardada (checkpoint cada 5 niveles), recibida al iniciar sesión
+let savedGameData = null;
+
+function updateStartScreenUI() {
+    if (startBtn) {
+        startBtn.innerText = (savedGameData && savedGameData.level > 1)
+            ? `CONTINUAR (Nivel ${savedGameData.level})`
+            : 'EMPEZAR';
+    }
+    if (newGameBtn) {
+        newGameBtn.classList.toggle('hidden', !(savedGameData && savedGameData.level > 1));
+    }
+}
 
 function updateScoreDisplay() {
     scoreValue.innerText = score;
@@ -628,15 +644,18 @@ function useShield() {
     createExplosion(player.x, player.y, 1.0);
 }
 
-function initPlatforms() {
+function initPlatforms(startLevel = 1, startScore = 0) {
     platforms = [];
     props = [];
     obstacles = [];
     powerups = [];
     blackHoles = [];
     particles = [];
-    level = 1; score = 0; platformsInLevel = 5; platformsReached = 0; totalPlatformGlobalCount = 0;
-    combo = 0; windForce = 0; gravityFactor = 1.0;
+    level = Math.max(1, startLevel);
+    score = Math.max(0, startScore);
+    platformsInLevel = 5 + Math.floor(level / 2);
+    platformsReached = 0; totalPlatformGlobalCount = 0;
+    combo = 0; windForce = (level >= 12) ? (Math.random() - 0.5) * 0.15 : 0; gravityFactor = 1.0;
     hasShield = false; canDoubleJump = false; doubleJumpUsed = false;
     inventory = []; updateInventoryUI();
     ballSpeedFactor = 1.0; greenPowerActive = 0; platformItemActive = false; bombActive = false;
@@ -721,6 +740,11 @@ function nextLevel() {
     platformsInLevel = 5 + Math.floor(level / 2);
     platformsReached = 0;
     showFeedback("¡NIVEL " + level + "!" + (windForce !== 0 ? "\n¡CUIDADO CON EL VIENTO!" : "") + (gravityFactor < 1 ? "\n¡GRAVEDAD BAJA!" : ""));
+
+    // Guardado automático cada 5 niveles (checkpoint)
+    if (level % 5 === 0 && window.BJFirebase && window.BJFirebase.isSignedIn()) {
+        window.BJFirebase.saveProgress(score, level);
+    }
 
     const current = player.currentPlatform;
     platforms = [current];
@@ -965,19 +989,21 @@ function draw() {
 }
 
 function gameLoop() { update(); draw(); requestAnimationFrame(gameLoop); }
-function startGame() {
+function startGame(continueGame = false) {
     // Hay que iniciar sesión con Google antes de poder jugar
     if (window.BJFirebase && !window.BJFirebase.isSignedIn()) {
         window.BJFirebase.promptSignIn();
         return;
     }
     gameActive = true;
-    score = 0;
-    level = 1;
-    levelValue.innerText = "1";
     startScreen.classList.add('hidden');
     gameOverScreen.classList.add('hidden');
-    initPlatforms();
+    if (rankingFab) rankingFab.classList.remove('hidden');
+
+    const resume = continueGame && savedGameData && savedGameData.level > 1;
+    initPlatforms(resume ? savedGameData.level : 1, resume ? (savedGameData.score || 0) : 0);
+    levelValue.innerText = level;
+    updateScoreDisplay();
     precisionSystem.spawnBall();
 }
 function endGame() {
@@ -985,6 +1011,7 @@ function endGame() {
     finalScore.innerText = score;
     finalLevel.innerText = level;
     gameOverScreen.classList.remove('hidden');
+    if (rankingFab) rankingFab.classList.add('hidden');
     if (window.BJFirebase) window.BJFirebase.reportScore(score, level);
 }
 
@@ -1000,20 +1027,26 @@ window.__bjCloseRanking = () => {
 };
 
 // Si el mejor puntaje remoto (Firebase) es mayor que el local, lo adoptamos.
+// También recibimos aquí la partida guardada (checkpoint) para ofrecer "Continuar".
 window.addEventListener('bj-auth-changed', (e) => {
-    if (e.detail && e.detail.signedIn && typeof e.detail.bestScore === 'number') {
-        if (e.detail.bestScore > bestScore) {
+    if (e.detail && e.detail.signedIn) {
+        if (typeof e.detail.bestScore === 'number' && e.detail.bestScore > bestScore) {
             bestScore = e.detail.bestScore;
             try { localStorage.setItem('boxjump_best_score', String(bestScore)); } catch (err) { /* no disponible */ }
         }
         if (bestValueEl) bestValueEl.innerText = bestScore;
+        savedGameData = e.detail.savedGame || null;
+    } else {
+        savedGameData = null;
     }
+    updateStartScreenUI();
 });
 
 window.addEventListener('resize', resize);
 resize();
-startBtn.addEventListener('click', startGame);
-restartBtn.addEventListener('click', startGame);
+startBtn.addEventListener('click', () => startGame(true));
+if (newGameBtn) newGameBtn.addEventListener('click', () => startGame(false));
+restartBtn.addEventListener('click', () => startGame(false));
 
 const triggerAction = (e) => {
     // Si item bomba está activo (especial: el juego está pausado)
