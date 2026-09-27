@@ -25,8 +25,34 @@
             <div id="score-container" class="hud-item right">
                 <span class="hud-label">PUNTOS</span>
                 <span id="score-value">0</span>
+                <span id="best-label">Mejor: <span id="best-value">0</span></span>
             </div>
             <div id="shop-fab">🛒</div>
+            <div id="ranking-fab" class="hidden">🏆</div>
+            <div id="combo-container" class="hidden">
+                <span id="combo-value">COMBO x0</span>
+            </div>
+            <div id="ranking-modal" class="screen hidden">
+                <div class="glass-card ranking-card">
+                    <h2>CLASIFICACIÓN</h2>
+                    <div class="ranking-tabs">
+                        <button id="tab-global" class="rank-tab active">🌍 GLOBAL</button>
+                        <button id="tab-friends" class="rank-tab">👥 AMIGOS</button>
+                    </div>
+                    <div id="ranking-list" class="ranking-list">
+                        <p class="ranking-empty">Cargando...</p>
+                    </div>
+                    <div id="add-friend-row" class="hidden">
+                        <input id="friend-code-input" type="text" placeholder="Código de amigo" maxlength="40" />
+                        <button id="add-friend-btn">AÑADIR</button>
+                    </div>
+                    <div id="my-friend-code" class="hidden">
+                        <span>Tu código: <strong id="my-code-value">-</strong></span>
+                        <button id="copy-code-btn" title="Copiar código">📋</button>
+                    </div>
+                    <button id="close-ranking-btn">CERRAR</button>
+                </div>
+            </div>
             <div id="msg-overlay" class="hidden">
                 <h2 id="msg-text">EXCELENTE</h2>
             </div>
@@ -84,7 +110,19 @@
                 <div class="glass-card">
                     <h1>BOX JUMP</h1>
                     <p>Precisión es la clave</p>
-                    <button id="start-btn">EMPEZAR</button>
+                    <div id="login-block">
+                        <p class="auth-hint">Inicia sesión con Google para jugar y guardar tu puntuación</p>
+                        <button id="google-signin-btn" class="google-btn">
+                            <span class="google-icon">G</span> Conectar con Google
+                        </button>
+                    </div>
+                    <div id="profile-block" class="hidden">
+                        <img id="profile-avatar" alt="avatar" />
+                        <p id="profile-name"></p>
+                        <button id="start-btn">EMPEZAR</button>
+                        <button id="view-ranking-btn" class="secondary-btn">🏆 CLASIFICACIÓN</button>
+                        <button id="signout-btn" class="secondary-btn ghost-btn">Cerrar sesión</button>
+                    </div>
                 </div>
             </div>
             <div id="game-over-screen" class="screen hidden">
@@ -99,6 +137,265 @@
             </div>
         </div>
         <script src="game.js"></script>
+
+        <script type="module">
+            import { initializeApp } from "https://www.gstatic.com/firebasejs/12.12.1/firebase-app.js";
+            import {
+                getAuth, GoogleAuthProvider, signInWithPopup, signOut, onAuthStateChanged
+            } from "https://www.gstatic.com/firebasejs/12.12.1/firebase-auth.js";
+            import {
+                getFirestore, doc, getDoc, setDoc, updateDoc, arrayUnion,
+                collection, query, orderBy, limit, getDocs, serverTimestamp
+            } from "https://www.gstatic.com/firebasejs/12.12.1/firebase-firestore.js";
+
+            const firebaseConfig = {
+                apiKey: "AIzaSyDe0IgL9f9s_2YbuFNBIEGsUW23YCdr-SE",
+                authDomain: "boxjump-629c3.firebaseapp.com",
+                projectId: "boxjump-629c3",
+                storageBucket: "boxjump-629c3.firebasestorage.app",
+                messagingSenderId: "379206365429",
+                appId: "1:379206365429:web:3201f0350a03671e4f95bc",
+                measurementId: "G-RZ45FWBDWY"
+            };
+
+            const app = initializeApp(firebaseConfig);
+            const auth = getAuth(app);
+            const db = getFirestore(app);
+            const provider = new GoogleAuthProvider();
+
+            let currentUser = null;
+            let activeTab = 'global';
+
+            // --- Elementos DOM ---
+            const loginBlock = document.getElementById('login-block');
+            const profileBlock = document.getElementById('profile-block');
+            const profileAvatar = document.getElementById('profile-avatar');
+            const profileName = document.getElementById('profile-name');
+            const googleBtn = document.getElementById('google-signin-btn');
+            const signoutBtn = document.getElementById('signout-btn');
+            const viewRankingBtn = document.getElementById('view-ranking-btn');
+            const rankingFab = document.getElementById('ranking-fab');
+            const rankingModal = document.getElementById('ranking-modal');
+            const rankingList = document.getElementById('ranking-list');
+            const closeRankingBtn = document.getElementById('close-ranking-btn');
+            const tabGlobal = document.getElementById('tab-global');
+            const tabFriends = document.getElementById('tab-friends');
+            const addFriendRow = document.getElementById('add-friend-row');
+            const friendCodeInput = document.getElementById('friend-code-input');
+            const addFriendBtn = document.getElementById('add-friend-btn');
+            const myFriendCodeEl = document.getElementById('my-friend-code');
+            const myCodeValue = document.getElementById('my-code-value');
+            const copyCodeBtn = document.getElementById('copy-code-btn');
+
+            profileAvatar.onerror = () => { profileAvatar.style.visibility = 'hidden'; };
+
+            // Crea el documento del usuario en Firestore si es la primera vez que entra
+            async function ensureUserDoc(user) {
+                const ref = doc(db, 'users', user.uid);
+                const snap = await getDoc(ref);
+                if (!snap.exists()) {
+                    const initial = {
+                        displayName: user.displayName || 'Jugador',
+                        photoURL: user.photoURL || '',
+                        bestScore: 0,
+                        bestLevel: 1,
+                        friends: [],
+                        createdAt: serverTimestamp(),
+                        updatedAt: serverTimestamp(),
+                    };
+                    await setDoc(ref, initial);
+                    return initial;
+                }
+                // Mantener nombre/foto sincronizados por si cambian en la cuenta de Google
+                await updateDoc(ref, {
+                    displayName: user.displayName || 'Jugador',
+                    photoURL: user.photoURL || '',
+                });
+                return snap.data();
+            }
+
+            onAuthStateChanged(auth, async (user) => {
+                currentUser = user;
+                if (user) {
+                    loginBlock.classList.add('hidden');
+                    profileBlock.classList.remove('hidden');
+                    profileAvatar.style.visibility = 'visible';
+                    profileAvatar.src = user.photoURL || '';
+                    profileName.innerText = user.displayName || 'Jugador';
+                    rankingFab.classList.remove('hidden');
+                    myFriendCodeEl.classList.remove('hidden');
+                    myCodeValue.innerText = user.uid;
+                    try {
+                        const data = await ensureUserDoc(user);
+                        window.dispatchEvent(new CustomEvent('bj-auth-changed', {
+                            detail: { signedIn: true, uid: user.uid, bestScore: data.bestScore || 0 }
+                        }));
+                    } catch (e) {
+                        console.error('Error leyendo/creando el perfil en Firestore:', e);
+                    }
+                } else {
+                    loginBlock.classList.remove('hidden');
+                    profileBlock.classList.add('hidden');
+                    rankingFab.classList.add('hidden');
+                    rankingModal.classList.add('hidden');
+                    myFriendCodeEl.classList.add('hidden');
+                    window.dispatchEvent(new CustomEvent('bj-auth-changed', { detail: { signedIn: false } }));
+                }
+            });
+
+            googleBtn.addEventListener('click', async () => {
+                try {
+                    await signInWithPopup(auth, provider);
+                } catch (e) {
+                    console.error('Error al iniciar sesión:', e);
+                    alert('No se pudo iniciar sesión con Google. Inténtalo de nuevo.');
+                }
+            });
+
+            signoutBtn.addEventListener('click', async () => {
+                try { await signOut(auth); } catch (e) { console.error(e); }
+            });
+
+            async function reportScore(score, level) {
+                if (!currentUser) return;
+                try {
+                    const ref = doc(db, 'users', currentUser.uid);
+                    const snap = await getDoc(ref);
+                    const data = snap.exists() ? snap.data() : { bestScore: 0, bestLevel: 1 };
+                    if (score > (data.bestScore || 0)) {
+                        await updateDoc(ref, {
+                            bestScore: score,
+                            bestLevel: Math.max(level, data.bestLevel || 1),
+                            displayName: currentUser.displayName || 'Jugador',
+                            photoURL: currentUser.photoURL || '',
+                            updatedAt: serverTimestamp(),
+                        });
+                    }
+                } catch (e) {
+                    console.error('No se pudo guardar la puntuación en Firebase:', e);
+                }
+            }
+
+            async function getTopUsers(n = 20) {
+                const q = query(collection(db, 'users'), orderBy('bestScore', 'desc'), limit(n));
+                const snap = await getDocs(q);
+                return snap.docs.map(d => ({ uid: d.id, ...d.data() }));
+            }
+
+            async function getFriendsTop() {
+                if (!currentUser) return [];
+                const mySnap = await getDoc(doc(db, 'users', currentUser.uid));
+                const myData = mySnap.exists() ? mySnap.data() : { friends: [], bestScore: 0 };
+                const friendUids = myData.friends || [];
+                const results = [{ uid: currentUser.uid, ...myData }];
+                for (const fid of friendUids) {
+                    try {
+                        const fSnap = await getDoc(doc(db, 'users', fid));
+                        if (fSnap.exists()) results.push({ uid: fid, ...fSnap.data() });
+                    } catch (e) { /* amigo no encontrado o sin permiso: se omite */ }
+                }
+                results.sort((a, b) => (b.bestScore || 0) - (a.bestScore || 0));
+                return results;
+            }
+
+            async function addFriend(code) {
+                const clean = (code || '').trim();
+                if (!clean || !currentUser) return { ok: false, msg: 'Código vacío' };
+                if (clean === currentUser.uid) return { ok: false, msg: 'No puedes añadirte a ti mismo' };
+                try {
+                    const fSnap = await getDoc(doc(db, 'users', clean));
+                    if (!fSnap.exists()) return { ok: false, msg: 'No existe ningún jugador con ese código' };
+                    await updateDoc(doc(db, 'users', currentUser.uid), { friends: arrayUnion(clean) });
+                    return { ok: true };
+                } catch (e) {
+                    console.error(e);
+                    return { ok: false, msg: 'Error al añadir amigo' };
+                }
+            }
+
+            function renderList(items, emptyMsg) {
+                rankingList.innerHTML = '';
+                if (!items.length) {
+                    rankingList.innerHTML = `<p class="ranking-empty">${emptyMsg}</p>`;
+                    return;
+                }
+                items.forEach((it, i) => {
+                    const row = document.createElement('div');
+                    row.className = 'ranking-row' + (currentUser && it.uid === currentUser.uid ? ' me' : '');
+                    const medal = i === 0 ? '🥇' : i === 1 ? '🥈' : i === 2 ? '🥉' : `${i + 1}º`;
+                    const safeName = (it.displayName || 'Jugador').replace(/[<>&]/g, '');
+                    row.innerHTML = `
+                        <span class="rank-pos">${medal}</span>
+                        <img class="rank-avatar" src="${it.photoURL || ''}" onerror="this.style.visibility='hidden'" />
+                        <span class="rank-name">${safeName}</span>
+                        <span class="rank-score">${it.bestScore || 0}</span>
+                    `;
+                    rankingList.appendChild(row);
+                });
+            }
+
+            async function refreshRanking() {
+                rankingList.innerHTML = '<p class="ranking-empty">Cargando...</p>';
+                if (activeTab === 'global') {
+                    addFriendRow.classList.add('hidden');
+                    try {
+                        renderList(await getTopUsers(20), 'Aún no hay puntuaciones. ¡Sé el primero!');
+                    } catch (e) {
+                        console.error(e);
+                        rankingList.innerHTML = '<p class="ranking-empty">Error al cargar la clasificación.</p>';
+                    }
+                } else {
+                    addFriendRow.classList.remove('hidden');
+                    try {
+                        renderList(await getFriendsTop(), 'Añade amigos con su código para ver su clasificación aquí.');
+                    } catch (e) {
+                        console.error(e);
+                        rankingList.innerHTML = '<p class="ranking-empty">Error al cargar tus amigos.</p>';
+                    }
+                }
+            }
+
+            function openRanking() {
+                rankingModal.classList.remove('hidden');
+                window.__bjOpenRanking && window.__bjOpenRanking();
+                refreshRanking();
+            }
+            rankingFab.addEventListener('click', openRanking);
+            viewRankingBtn.addEventListener('click', openRanking);
+            closeRankingBtn.addEventListener('click', () => {
+                rankingModal.classList.add('hidden');
+                window.__bjCloseRanking && window.__bjCloseRanking();
+            });
+            tabGlobal.addEventListener('click', () => {
+                activeTab = 'global';
+                tabGlobal.classList.add('active'); tabFriends.classList.remove('active');
+                refreshRanking();
+            });
+            tabFriends.addEventListener('click', () => {
+                activeTab = 'friends';
+                tabFriends.classList.add('active'); tabGlobal.classList.remove('active');
+                refreshRanking();
+            });
+            addFriendBtn.addEventListener('click', async () => {
+                addFriendBtn.disabled = true;
+                const res = await addFriend(friendCodeInput.value);
+                addFriendBtn.disabled = false;
+                if (res.ok) { friendCodeInput.value = ''; refreshRanking(); }
+                else { alert(res.msg); }
+            });
+            copyCodeBtn.addEventListener('click', () => {
+                if (currentUser && navigator.clipboard) {
+                    navigator.clipboard.writeText(currentUser.uid).catch(() => {});
+                }
+            });
+
+            // API expuesta para game.js (script clásico, no-módulo)
+            window.BJFirebase = {
+                isSignedIn: () => !!currentUser,
+                promptSignIn: () => { googleBtn.click(); },
+                reportScore,
+            };
+        </script>
 </body>
 
 </html>

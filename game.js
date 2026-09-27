@@ -18,6 +18,9 @@ const msgText = document.getElementById('msg-text');
 const shopFab = document.getElementById('shop-fab');
 const shopModal = document.getElementById('shop-modal');
 const closeShopBtn = document.getElementById('close-shop-btn');
+const comboContainer = document.getElementById('combo-container');
+const comboValueEl = document.getElementById('combo-value');
+const bestValueEl = document.getElementById('best-value');
 
 // CONFIGURACIÓN GLOBAL
 let width, height;
@@ -30,6 +33,36 @@ let totalPlatformGlobalCount = 0;
 let platforms = [];
 let props = [];
 let particles = [];
+
+// Mejor puntuación histórica (persistida en este navegador)
+let bestScore = 0;
+try {
+    bestScore = parseInt(localStorage.getItem('boxjump_best_score'), 10) || 0;
+} catch (e) { bestScore = 0; }
+if (bestValueEl) bestValueEl.innerText = bestScore;
+
+function updateScoreDisplay() {
+    scoreValue.innerText = score;
+    if (score > bestScore) {
+        bestScore = score;
+        try { localStorage.setItem('boxjump_best_score', String(bestScore)); } catch (e) { /* almacenamiento no disponible */ }
+    }
+    bestValueEl.innerText = bestScore;
+}
+
+function updateComboDisplay() {
+    if (combo > 1) {
+        comboContainer.classList.remove('hidden');
+        comboValueEl.innerText = `COMBO x${combo}`;
+        const scale = Math.min(1.8, 1 + combo * 0.06);
+        comboContainer.style.transform = `translateX(-50%) scale(${scale})`;
+        comboContainer.classList.toggle('combo-hot', combo >= 5 && combo < 10);
+        comboContainer.classList.toggle('combo-fire', combo >= 10);
+    } else {
+        comboContainer.classList.add('hidden');
+        comboContainer.classList.remove('combo-hot', 'combo-fire');
+    }
+}
 
 const THEME = {
     player: '#00f2ff',
@@ -176,11 +209,12 @@ const precisionSystem = {
             difficultyFactor = Math.max(1, distY / 150);
         }
 
-        // Zona verde dinámica
-        this.targetArea.greenScale = Math.max(0.05, 0.45 - (difficultyFactor * 0.3));
+        // Zona verde dinámica (con margen extra en los primeros niveles para una curva de entrada más suave)
+        const levelEase = Math.max(0, (10 - level) * 0.035);
+        this.targetArea.greenScale = Math.min(0.9, Math.max(0.05, 0.45 - (difficultyFactor * 0.3) + levelEase));
 
         const randomVariance = (Math.random() - 0.5) * 1.5;
-        this.ball.speed = (5 + (score * 0.005) + (difficultyFactor * 2.5)) + randomVariance;
+        this.ball.speed = (5 + (Math.min(score, 6000) * 0.004) + (difficultyFactor * 2.5)) + randomVariance;
         if (this.ball.speed < 4) this.ball.speed = 4;
         if (this.ball.speed > 16) this.ball.speed = 16;
     },
@@ -230,7 +264,8 @@ const precisionSystem = {
             const comboBonus = 1 + (combo > 1 ? combo * 0.1 : 0);
             const points = Math.round(subScore * 100 * comboBonus);
             score += points;
-            scoreValue.innerText = score;
+            updateScoreDisplay();
+            updateComboDisplay();
 
             let feedback = tier + (tier === "PERFECT" ? ` x${Math.round(subScore * 5)}` : "") + " +" + points;
             if (combo > 1) feedback += `\nCOMBO x${combo}!`;
@@ -241,6 +276,7 @@ const precisionSystem = {
             return { multiplier, tier, subScore };
         }
         combo = 0; // Fallar tiro reinicia combo
+        updateComboDisplay();
         return { multiplier: 0, tier: "MISSED", subScore: 0 };
     },
 
@@ -339,7 +375,7 @@ class Prop {
             this.isOffScreen = true;
             const extraPoints = Math.round(50 * this.weight);
             score += extraPoints;
-            scoreValue.innerText = score;
+            updateScoreDisplay();
             showFeedback("+PUNTOS EXTRA! +" + extraPoints);
             return false;
         }
@@ -607,7 +643,8 @@ function initPlatforms() {
     if (clockTimeoutId) { clearTimeout(clockTimeoutId); clockTimeoutId = null; }
 
     levelValue.innerText = level;
-    scoreValue.innerText = score;
+    updateScoreDisplay();
+    updateComboDisplay();
 
     platforms.push(new Platform(width / 2 - 50, height - 150, 100, 20));
     player.x = width / 2 - player.w / 2;
@@ -636,13 +673,13 @@ function spawnNextPlatform(forceGoal = false) {
     let type = 'normal';
     if (!forceGoal) {
         const rand = Math.random();
-        if (totalPlatformGlobalCount % 10 === 0) type = 'vanishing';
-        else if (level >= 25 && rand < 0.06) type = 'flash';
-        else if (level >= 20 && rand < 0.14) type = 'fragile';
-        else if (level >= 14 && rand < 0.22) type = 'mini_sticky';
-        else if (level >= 10 && rand < 0.32) type = (Math.random() > 0.5 ? 'ice' : 'sticky');
-        else if (level >= 8 && rand < 0.40) type = 'spring';
-        else if (level >= 5 && rand < 0.55) type = 'moving';
+        if (level >= 6 && totalPlatformGlobalCount % 10 === 0) type = 'vanishing';
+        else if (level >= 27 && rand < 0.06) type = 'flash';
+        else if (level >= 22 && rand < 0.14) type = 'fragile';
+        else if (level >= 16 && rand < 0.22) type = 'mini_sticky';
+        else if (level >= 12 && rand < 0.32) type = (Math.random() > 0.5 ? 'ice' : 'sticky');
+        else if (level >= 6 && rand < 0.40) type = 'spring';
+        else if (level >= 8 && rand < 0.55) type = 'moving';
     }
 
     const platform = new Platform(nextX, nextY, nextW, 20, forceGoal, type);
@@ -929,10 +966,14 @@ function draw() {
 
 function gameLoop() { update(); draw(); requestAnimationFrame(gameLoop); }
 function startGame() {
+    // Hay que iniciar sesión con Google antes de poder jugar
+    if (window.BJFirebase && !window.BJFirebase.isSignedIn()) {
+        window.BJFirebase.promptSignIn();
+        return;
+    }
     gameActive = true;
     score = 0;
     level = 1;
-    scoreValue.innerText = "0";
     levelValue.innerText = "1";
     startScreen.classList.add('hidden');
     gameOverScreen.classList.add('hidden');
@@ -944,7 +985,30 @@ function endGame() {
     finalScore.innerText = score;
     finalLevel.innerText = level;
     gameOverScreen.classList.remove('hidden');
+    if (window.BJFirebase) window.BJFirebase.reportScore(score, level);
 }
+
+// Puente con el módulo de Firebase (index.html) para pausar el juego
+// mientras el jugador mira la clasificación, sin reanudarlo si no estaba jugando.
+window.__bjOpenRanking = () => {
+    window.__bjWasPlaying = gameActive;
+    gameActive = false;
+};
+window.__bjCloseRanking = () => {
+    if (window.__bjWasPlaying) gameActive = true;
+    window.__bjWasPlaying = false;
+};
+
+// Si el mejor puntaje remoto (Firebase) es mayor que el local, lo adoptamos.
+window.addEventListener('bj-auth-changed', (e) => {
+    if (e.detail && e.detail.signedIn && typeof e.detail.bestScore === 'number') {
+        if (e.detail.bestScore > bestScore) {
+            bestScore = e.detail.bestScore;
+            try { localStorage.setItem('boxjump_best_score', String(bestScore)); } catch (err) { /* no disponible */ }
+        }
+        if (bestValueEl) bestValueEl.innerText = bestScore;
+    }
+});
 
 window.addEventListener('resize', resize);
 resize();
@@ -1008,7 +1072,7 @@ const game = {
         if (inventory.length >= 3) { showFeedback("¡INVENTARIO LLENO!"); return; }
 
         score -= 1000;
-        scoreValue.innerText = score;
+        updateScoreDisplay();
         inventory.push(type);
         updateInventoryUI();
         showFeedback("¡COMPRADO: " + type.toUpperCase() + "!");
