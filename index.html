@@ -6,7 +6,7 @@
     <meta name="viewport"
         content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
     <title>Box Jump Precision</title>
-    <link rel="stylesheet" href="style.css">
+    <link rel="stylesheet" href="style.css?v=3">
 </head>
 
 <body>
@@ -145,7 +145,7 @@
                 </div>
             </div>
         </div>
-        <script src="game.js"></script>
+        <script src="game.js?v=3"></script>
 
         <script type="module">
             import { initializeApp } from "https://www.gstatic.com/firebasejs/12.12.1/firebase-app.js";
@@ -318,8 +318,8 @@
 
             googleBtn.addEventListener('click', async () => {
                 googleBtn.disabled = true;
-                authDebugMsg.classList.add('hidden');
                 try {
+                    authDebugMsg.classList.add('hidden');
                     if (inIframe) {
                         showAuthDebug('Esta página está embebida en un iframe: abre el enlace directamente en una pestaña del navegador para poder iniciar sesión con Google.');
                     }
