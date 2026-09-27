@@ -6,7 +6,15 @@
     <meta name="viewport"
         content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
     <title>Box Jump Precision</title>
-    <link rel="stylesheet" href="style.css?v=4">
+    <link rel="stylesheet" href="style.css?v=5">
+    <script>
+        // Consola de depuración visible en pantalla (solo si la URL lleva ?debug=1).
+        // Útil para ver errores reales en móvil/tablet sin cable USB ni PC.
+        if (location.search.includes('debug=1')) {
+            document.write('<script src="https://cdnjs.cloudflare.com/ajax/libs/eruda/3.2.3/eruda.min.js"><\/script>');
+            document.write('<script>window.addEventListener("load", function(){ if(window.eruda){ eruda.init(); } });<\/script>');
+        }
+    </script>
 </head>
 
 <body>
@@ -145,7 +153,7 @@
                 </div>
             </div>
         </div>
-        <script src="game.js?v=4"></script>
+        <script src="game.js?v=5"></script>
 
         <script type="module">
             import { initializeApp } from "https://www.gstatic.com/firebasejs/12.12.1/firebase-app.js";
