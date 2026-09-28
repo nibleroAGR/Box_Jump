@@ -108,6 +108,12 @@ let combo = 0;
 let maxCombo = 0;
 let windForce = 0;
 let gravityFactor = 1.0;
+
+// Viento (nivel >= 12): dirección aleatoria e intensidad mínima para que siempre se note
+function rollWind() {
+    if (level < 12) return 0;
+    return (Math.random() < 0.5 ? -1 : 1) * (0.025 + Math.random() * 0.055);
+}
 let hasShield = false;
 let canDoubleJump = false;
 let doubleJumpUsed = false;
@@ -657,11 +663,12 @@ function initPlatforms(startLevel = 1, startScore = 0) {
     powerups = [];
     blackHoles = [];
     particles = [];
+    aim.cancel();
     level = Math.max(1, startLevel);
     score = Math.max(0, startScore);
     platformsInLevel = 5 + Math.floor(level / 2);
     platformsReached = 0; totalPlatformGlobalCount = 0;
-    combo = 0; windForce = (level >= 12) ? (Math.random() - 0.5) * 0.15 : 0; gravityFactor = 1.0;
+    combo = 0; windForce = rollWind(); gravityFactor = 1.0;
     hasShield = false; canDoubleJump = false; doubleJumpUsed = false;
     inventory = []; updateInventoryUI();
     ballSpeedFactor = 1.0; greenPowerActive = 0; platformItemActive = false; bombActive = false;
@@ -740,7 +747,7 @@ function nextLevel() {
     levelValue.innerText = level;
 
     // Configuración ambiental según nivel
-    windForce = (level >= 12) ? (Math.random() - 0.5) * 0.15 : 0;
+    windForce = rollWind();
     gravityFactor = (level >= 30 && Math.random() < 0.3) ? 0.4 : 1.0; // Baja gravedad ocasional en modo Caos
 
     platformsInLevel = 5 + Math.floor(level / 2);
@@ -798,11 +805,13 @@ function createExplosion(x, y, multiplier) {
     }
 }
 
-function handleJump(precision) {
-    const { multiplier, tier, subScore } = precision;
-    if (!player.onGround || multiplier <= 0) return;
+// Calcula los parámetros del salto (sin ejecutarlo). Se calcula UNA vez para que
+// el azar del tier POOR no cambie mientras el jugador apunta.
+function computeJump(precision) {
+    const { multiplier, tier } = precision;
+    if (!player.onGround || multiplier <= 0) return null;
     const candidates = platforms.filter(p => p.y < player.y).sort((a, b) => b.y - a.y);
-    if (candidates.length === 0) return;
+    if (candidates.length === 0) return null;
     const target = candidates[0];
     const distY = player.y - target.y + player.h;
 
@@ -815,12 +824,216 @@ function handleJump(precision) {
     const tFall = Math.sqrt(Math.max(0, 2 * hFall / player.gravity));
     const totalT = tRise + tFall;
 
-    const targetCenterX = target.x + target.w / 2;
-    const dx = targetCenterX - (player.x + player.w / 2);
-    player.vy = vy;
-    player.vx = dx / totalT;
+    const dx = (target.x + target.w / 2) - (player.x + player.w / 2);
+    return { vy, vxBase: dx / totalT, totalT, target, tier };
+}
+
+function launchPlayer(j, vx) {
+    player.vy = j.vy;
+    player.vx = vx;
     player.onGround = false;
-    player.angularVelocity = (tier === "PERFECT" ? 0.15 : (tier === "GOOD" ? 0.35 : 0.6));
+    player.angularVelocity = (j.tier === "PERFECT" ? 0.15 : (j.tier === "GOOD" ? 0.35 : 0.6));
+}
+
+function handleJump(precision) {
+    const j = computeJump(precision);
+    if (!j) return;
+    launchPlayer(j, j.vxBase);
+}
+
+// Simula el salto con la MISMA física del juego (gravedad + viento + paredes + plataformas)
+function simulateJump(j, vx0) {
+    let x = player.x, y = player.y, vx = vx0, vy = j.vy;
+    const pts = [];
+    let tTarget = null, landing = null;
+    for (let step = 1; step <= 500; step++) {
+        const prevBottom = y + player.h;
+        vx += windForce;
+        vy += player.gravity * gravityFactor;
+        x += vx; y += vy;
+        if (x < 0) x = 0;
+        if (x + player.w > width) x = width - player.w;
+        const bottom = y + player.h;
+
+        if (vy >= 0 && tTarget === null && prevBottom < j.target.y && bottom >= j.target.y) tTarget = step;
+        if (step % 2 === 0) pts.push({ x: x + player.w / 2, y: y + player.h / 2 });
+
+        if (vy >= 0) {
+            for (const p of platforms) {
+                if (p.type === 'flash' && !p.isVisible) continue;
+                if (x + player.w > p.x && x < p.x + p.w && bottom >= p.y && bottom <= p.y + p.h + 10) {
+                    landing = { x: x + player.w / 2, y: p.y, onTarget: p === j.target };
+                    pts.push({ x: landing.x, y: p.y - player.h / 2 });
+                    break;
+                }
+            }
+            if (landing) break;
+        }
+        if (y > height + 60) break;
+    }
+    return { pts, landing, tTarget };
+}
+
+// --- MEDIDOR DE ÁNGULO (fases de viento) ---
+// Tras acertar la precisión, el mundo se congela y una aguja barre un arco alrededor
+// del cubo. Una línea punteada muestra dónde caería el salto (viento incluido).
+// Segundo toque = fijar el ángulo y saltar.
+const AIM_ARC = 55 * Math.PI / 180; // media apertura visual del arco
+const aim = {
+    active: false, s: 0, phase: 0, dir: 1, last: 0, startedAt: 0,
+    jump: null, range: 1, sim: null, period: 1.8,
+
+    start(precision) {
+        const j = computeJump(precision);
+        if (!j || !(j.totalT > 0)) return false;
+        const base = simulateJump(j, j.vxBase);
+        const T = base.tTarget || j.totalT;
+        // Rango lateral: cubre con margen (x1.6) lo necesario para anular el viento máximo
+        // y como mínimo ~2.2x la semi-ventana de acierto, para que el ajuste exija precisión
+        const hitHalfVx = ((j.target.w + player.w) / 2) / T;
+        this.range = Math.max(0.8, 0.5 * Math.abs(windForce) * T * 1.6, hitHalfVx * 2.2);
+        this.jump = j;
+        this.period = Math.max(1.2, 2.0 - (level - 12) * 0.03); // más rápido al subir de nivel
+        this.dir = Math.random() < 0.5 ? -1 : 1;
+        this.phase = 0; this.s = 0;
+        this.last = this.startedAt = performance.now();
+        this.sim = base;
+        this.active = true;
+        return true;
+    },
+
+    cancel() { this.active = false; this.jump = null; this.sim = null; },
+
+    vx() { return this.jump.vxBase + this.s * this.range; },
+
+    update() {
+        const now = performance.now();
+        const dt = Math.min(50, now - this.last) / 1000;
+        this.last = now;
+        this.phase += dt * Math.PI * 2 / this.period;
+        this.s = this.dir * Math.sin(this.phase);
+        this.sim = simulateJump(this.jump, this.vx());
+    },
+
+    lock() {
+        if (!this.active || performance.now() - this.startedAt < 180) return; // evita doble toque accidental
+        launchPlayer(this.jump, this.vx());
+        createExplosion(player.x + player.w / 2, player.y + player.h, 0.6);
+        if (navigator.vibrate) { try { navigator.vibrate(15); } catch (e) { } }
+        this.cancel();
+    },
+
+    // Corrección respecto a apuntar directo a la plataforma, en grados reales
+    deltaDeg() {
+        const vyAbs = Math.abs(this.jump.vy) || 1;
+        return (Math.atan(this.vx() / vyAbs) - Math.atan(this.jump.vxBase / vyAbs)) * 180 / Math.PI;
+    },
+
+    draw() {
+        if (!this.active || !this.sim) return;
+        const cx = player.x + player.w / 2, cy = player.y + player.h / 2;
+        const R = 66;
+        const land = this.sim.landing;
+        const col = land ? (land.onTarget ? '#00ff64' : '#ffae00') : '#ff3300';
+        const pulse = 0.6 + 0.4 * Math.sin(performance.now() / 120);
+
+        ctx.save();
+
+        // Trayectoria punteada (se desvanece con la distancia)
+        const pts = this.sim.pts;
+        for (let i = 0; i < pts.length; i++) {
+            ctx.globalAlpha = Math.max(0.15, 0.9 - (i / pts.length) * 0.7);
+            ctx.fillStyle = col;
+            ctx.beginPath(); ctx.arc(pts[i].x, pts[i].y, 2.2, 0, Math.PI * 2); ctx.fill();
+        }
+        ctx.globalAlpha = 1;
+
+        // Marcador de aterrizaje
+        if (land) {
+            ctx.strokeStyle = col; ctx.lineWidth = 2;
+            ctx.shadowBlur = 12; ctx.shadowColor = col;
+            ctx.strokeRect(land.x - player.w / 2, land.y - player.h, player.w, player.h);
+            ctx.globalAlpha = 0.15 * pulse + 0.1; ctx.fillStyle = col;
+            ctx.fillRect(land.x - player.w / 2, land.y - player.h, player.w, player.h);
+            ctx.globalAlpha = 1; ctx.shadowBlur = 0;
+        } else if (pts.length) {
+            const e = pts[pts.length - 1];
+            ctx.strokeStyle = col; ctx.lineWidth = 3;
+            ctx.beginPath();
+            ctx.moveTo(e.x - 8, e.y - 8); ctx.lineTo(e.x + 8, e.y + 8);
+            ctx.moveTo(e.x + 8, e.y - 8); ctx.lineTo(e.x - 8, e.y + 8);
+            ctx.stroke();
+        }
+
+        // Arco del medidor
+        const a0 = -Math.PI / 2 - AIM_ARC, a1 = -Math.PI / 2 + AIM_ARC;
+        ctx.lineCap = 'round';
+        ctx.strokeStyle = 'rgba(0, 242, 255, 0.18)'; ctx.lineWidth = 8;
+        ctx.beginPath(); ctx.arc(cx, cy, R, a0, a1); ctx.stroke();
+        ctx.strokeStyle = 'rgba(0, 242, 255, 0.55)'; ctx.lineWidth = 2;
+        ctx.beginPath(); ctx.arc(cx, cy, R + 5, a0, a1); ctx.stroke();
+
+        // Marcas: centro (apuntar directo) y cada 1/4 del recorrido
+        for (let k = -4; k <= 4; k++) {
+            const a = -Math.PI / 2 + (k / 4) * AIM_ARC;
+            const inner = R - (k === 0 ? 10 : 5), outer = R + (k === 0 ? 12 : 8);
+            ctx.strokeStyle = k === 0 ? '#ffffff' : 'rgba(255,255,255,0.45)';
+            ctx.lineWidth = k === 0 ? 2.5 : 1.5;
+            ctx.beginPath();
+            ctx.moveTo(cx + Math.cos(a) * inner, cy + Math.sin(a) * inner);
+            ctx.lineTo(cx + Math.cos(a) * outer, cy + Math.sin(a) * outer);
+            ctx.stroke();
+        }
+
+        // Aguja
+        const na = -Math.PI / 2 + this.s * AIM_ARC;
+        const nx = cx + Math.cos(na) * (R + 4), ny = cy + Math.sin(na) * (R + 4);
+        ctx.shadowBlur = 16; ctx.shadowColor = col;
+        ctx.strokeStyle = col; ctx.lineWidth = 3;
+        ctx.beginPath();
+        ctx.moveTo(cx + Math.cos(na) * 22, cy + Math.sin(na) * 22);
+        ctx.lineTo(nx, ny);
+        ctx.stroke();
+        ctx.fillStyle = '#fff';
+        ctx.beginPath(); ctx.arc(nx, ny, 5, 0, Math.PI * 2); ctx.fill();
+        ctx.shadowBlur = 0;
+
+        // Textos de ayuda (HUD superior, bajo el viento)
+        ctx.textAlign = 'center';
+        ctx.fillStyle = `rgba(255,255,255,${0.55 + 0.4 * pulse})`;
+        ctx.font = 'bold 12px Outfit, Inter, sans-serif';
+        ctx.fillText('TOCA PARA LANZAR', width / 2, 176);
+        const d = this.deltaDeg();
+        ctx.fillStyle = col;
+        ctx.font = 'bold 14px Outfit, Inter, sans-serif';
+        const txt = Math.abs(d) < 0.3 ? '0.0°' : (d < 0 ? `◄ ${Math.abs(d).toFixed(1)}°` : `${d.toFixed(1)}° ►`);
+        ctx.fillText(txt, width / 2, 196);
+        ctx.restore();
+    }
+};
+
+// Indicador de viento (dirección + intensidad) en el HUD del canvas
+function drawWindHUD() {
+    if (windForce === 0) return;
+    const dir = Math.sign(windForce);
+    const n = 1 + Math.min(3, Math.floor(Math.abs(windForce) / 0.022)); // 1..4 chevrons
+    const cx = width / 2, y = 146;
+    ctx.save();
+    ctx.textAlign = 'center';
+    ctx.fillStyle = 'rgba(255,255,255,0.6)';
+    ctx.font = 'bold 10px Outfit, Inter, sans-serif';
+    ctx.fillText('VIENTO', cx, y - 12);
+    ctx.strokeStyle = '#00f2ff'; ctx.lineWidth = 3; ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+    ctx.shadowBlur = 10; ctx.shadowColor = '#00f2ff';
+    const t = (Date.now() / 250) % 1;
+    for (let i = 0; i < n; i++) {
+        const px = cx + dir * (i - (n - 1) / 2) * 14;
+        ctx.globalAlpha = 0.35 + 0.65 * (((i / n) + t) % 1);
+        ctx.beginPath();
+        ctx.moveTo(px - dir * 5, y - 7); ctx.lineTo(px + dir * 5, y); ctx.lineTo(px - dir * 5, y + 7);
+        ctx.stroke();
+    }
+    ctx.restore();
 }
 
 function checkCollisions() {
@@ -909,8 +1122,17 @@ function checkCollisions() {
     });
 }
 
+function updateParticles() {
+    for (let i = particles.length - 1; i >= 0; i--) {
+        const p = particles[i];
+        p.x += p.vx; p.y += p.vy; p.life -= 0.02;
+        if (p.life <= 0) particles.splice(i, 1);
+    }
+}
+
 function update() {
     if (!gameActive) return;
+    if (aim.active) { aim.update(); updateParticles(); return; } // mundo congelado mientras se apunta
     player.update();
     precisionSystem.update();
 
@@ -944,11 +1166,7 @@ function update() {
         blackHoles.forEach(bh => bh.y += diff);
     }
 
-    for (let i = particles.length - 1; i >= 0; i--) {
-        const p = particles[i];
-        p.x += p.vx; p.y += p.vy; p.life -= 0.02;
-        if (p.life <= 0) particles.splice(i, 1);
-    }
+    updateParticles();
 }
 
 function draw() {
@@ -965,7 +1183,8 @@ function draw() {
     if (windForce !== 0) {
         ctx.fillStyle = 'rgba(255,255,255,0.05)';
         for (let i = 0; i < 10; i++) {
-            const wx = (Date.now() * 0.5 + i * 100) % width;
+            const spd = 0.3 + Math.abs(windForce) * 8;
+            const wx = (((Date.now() * spd * Math.sign(windForce) + i * 100) % width) + width) % width;
             ctx.fillRect(wx, (i * height / 10), 50, 2);
         }
     }
@@ -977,6 +1196,8 @@ function draw() {
     obstacles.forEach(o => o.draw());
     player.draw();
     precisionSystem.draw();
+    drawWindHUD();
+    aim.draw();
 
     // UI del Escudo / Powerups
     if (hasShield) {
@@ -1084,6 +1305,9 @@ const triggerAction = (e) => {
 
     if (!gameActive) return;
 
+    // Medidor de ángulo activo: este toque fija el ángulo y lanza
+    if (aim.active) { aim.lock(); return; }
+
     // Si item plataforma está activo (deprecated por la nueva instrucción de ser instantáneo, 
     // pero lo limpio por si acaso quedaba algo)
     if (platformItemActive) { platformItemActive = false; }
@@ -1091,7 +1315,8 @@ const triggerAction = (e) => {
     const precision = precisionSystem.checkHit();
     if (precision.multiplier > 0) {
         if (player.onGround) {
-            handleJump(precision);
+            // Con viento: primero se apunta (medidor de ángulo); sin viento, salto directo
+            if (!(windForce !== 0 && aim.start(precision))) handleJump(precision);
         } else if (canDoubleJump && !doubleJumpUsed) {
             handleJump(precision);
             doubleJumpUsed = true;
@@ -1123,7 +1348,7 @@ const game = {
         showFeedback("¡COMPRADO: " + type.toUpperCase() + "!");
     },
     useItem(index) {
-        if (!inventory[index]) return;
+        if (aim.active || !inventory[index]) return;
         const type = inventory[index];
         inventory.splice(index, 1);
         updateInventoryUI();
