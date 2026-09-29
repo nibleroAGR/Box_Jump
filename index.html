@@ -111,23 +111,10 @@
                     <h1>BOX JUMP</h1>
                     <p>Precisión es la clave</p>
                     <div id="login-block">
-                        <p class="auth-hint" id="auth-hint">Inicia sesión para jugar y guardar tu puntuación</p>
-                        <div class="auth-tabs">
-                            <button id="tab-login" class="auth-tab active" type="button">ACCEDER</button>
-                            <button id="tab-register" class="auth-tab" type="button">REGISTRARSE</button>
-                        </div>
-                        <div id="auth-form">
-                            <input id="auth-username" class="auth-input hidden" type="text" maxlength="20"
-                                placeholder="Nombre de usuario (opcional)" autocomplete="nickname" />
-                            <input id="auth-email" class="auth-input" type="email" placeholder="Email"
-                                autocomplete="email" />
-                            <input id="auth-password" class="auth-input" type="password" placeholder="Contraseña"
-                                autocomplete="current-password" />
-                            <input id="auth-password2" class="auth-input hidden" type="password"
-                                placeholder="Repite la contraseña" autocomplete="new-password" />
-                            <button id="auth-submit-btn" type="button">ACCEDER</button>
-                            <button id="forgot-btn" class="secondary-btn ghost-btn" type="button">¿Olvidaste tu contraseña?</button>
-                        </div>
+                        <p class="auth-hint">Inicia sesión con Google para jugar y guardar tu puntuación</p>
+                        <button id="google-signin-btn" class="google-btn" type="button">
+                            <span class="google-icon">G</span> Conectar con Google
+                        </button>
                         <p id="auth-debug-msg" class="auth-hint hidden" style="color:#ff6b6b;"></p>
                     </div>
                     <div id="profile-block" class="hidden">
@@ -166,7 +153,7 @@
         <script src="https://www.gstatic.com/firebasejs/10.13.2/firebase-app-compat.js"></script>
         <script src="https://www.gstatic.com/firebasejs/10.13.2/firebase-auth-compat.js"></script>
         <script src="https://www.gstatic.com/firebasejs/10.13.2/firebase-firestore-compat.js"></script>
-        <script src="backend.js?v=3"></script>
+        <script src="backend.js?v=4"></script>
     </div>
 </body>
 

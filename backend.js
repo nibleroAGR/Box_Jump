@@ -4,7 +4,7 @@
    sin import/export encadenados) para máxima compatibilidad entre
    navegadores y dispositivos.
 
-   Login: email y contraseña (Firebase Auth).
+   Login: Google (Firebase Auth).
 
    Contrato con game.js (no se toca game.js, solo se respeta esta API):
      - window.BJFirebase.isSignedIn()          -> boolean
@@ -44,6 +44,11 @@
     }
 
     firebase.initializeApp(firebaseConfig);
+    const provider = new firebase.auth.GoogleAuthProvider();
+    provider.setCustomParameters({ prompt: 'select_account' });
+    // ¿Estamos dentro de un iframe? Ahí signInWithRedirect no funciona.
+    let inIframe = false;
+    try { inIframe = window.self !== window.top; } catch (e) { inIframe = true; }
     const auth = firebase.auth();
     const db = firebase.firestore();
     // Ayuda en redes móviles / proxies donde el canal normal de Firestore falla
@@ -60,15 +65,7 @@
         profileBlock: $('profile-block'),
         profileAvatar: $('profile-avatar'),
         profileName: $('profile-name'),
-        tabLogin: $('tab-login'),
-        tabRegister: $('tab-register'),
-        authUsername: $('auth-username'),
-        authEmail: $('auth-email'),
-        authPassword: $('auth-password'),
-        authPassword2: $('auth-password2'),
-        authSubmitBtn: $('auth-submit-btn'),
-        forgotBtn: $('forgot-btn'),
-        authHint: $('auth-hint'),
+        googleBtn: $('google-signin-btn'),
         signoutBtn: $('signout-btn'),
         authDebugMsg: $('auth-debug-msg'),
         rankingFab: $('ranking-fab'),
@@ -93,7 +90,6 @@
     dom.profileAvatar.onerror = () => { dom.profileAvatar.style.visibility = 'hidden'; };
 
     let currentUser = null;
-    let authMode = 'login'; // 'login' | 'register'
 
     function avatarFor(name) {
         const letter = ((name || 'J').trim()[0] || 'J').toUpperCase().replace(/[<>&"']/g, 'J');
@@ -103,19 +99,14 @@
     let activeRankingTab = 'global';
 
     const AUTH_ERRORS = {
-        'auth/invalid-email': 'El email no es válido.',
-        'auth/missing-email': 'Introduce tu email.',
-        'auth/missing-password': 'Introduce tu contraseña.',
-        'auth/user-not-found': 'No existe ninguna cuenta con ese email.',
-        'auth/wrong-password': 'Contraseña incorrecta.',
-        'auth/invalid-credential': 'Email o contraseña incorrectos.',
-        'auth/invalid-login-credentials': 'Email o contraseña incorrectos.',
-        'auth/email-already-in-use': 'Ya existe una cuenta con ese email.',
-        'auth/weak-password': 'La contraseña debe tener al menos 6 caracteres.',
-        'auth/too-many-requests': 'Demasiados intentos. Espera un momento e inténtalo de nuevo.',
+        'auth/popup-closed-by-user': 'Has cerrado la ventana de Google antes de terminar.',
+        'auth/popup-blocked': 'El navegador ha bloqueado la ventana de Google. Permite las ventanas emergentes.',
+        'auth/unauthorized-domain': 'Este dominio no está autorizado en Firebase (Authentication → Settings → Authorized domains).',
         'auth/network-request-failed': 'Error de red. Comprueba tu conexión.',
+        'auth/too-many-requests': 'Demasiados intentos. Espera un momento e inténtalo de nuevo.',
         'auth/user-disabled': 'Esta cuenta ha sido deshabilitada.',
-        'auth/operation-not-allowed': 'El acceso con email/contraseña no está activado en Firebase.',
+        'auth/operation-not-allowed': 'El acceso con Google no está activado en Firebase.',
+        'auth/web-storage-unsupported': 'Tu navegador bloquea el almacenamiento. Abre el juego en Chrome o Safari.',
     };
     function showAuthError(err, isInfo) {
         if (!dom.authDebugMsg) return;
@@ -324,79 +315,39 @@
     // ---------------------------------------------------------------
     // 6) Registro / login / logout con email y contraseña
     // ---------------------------------------------------------------
-    function setAuthMode(mode) {
-        authMode = mode;
-        const reg = mode === 'register';
-        dom.tabLogin.classList.toggle('active', !reg);
-        dom.tabRegister.classList.toggle('active', reg);
-        dom.authUsername.classList.toggle('hidden', !reg);
-        dom.authPassword2.classList.toggle('hidden', !reg);
-        dom.forgotBtn.classList.toggle('hidden', reg);
-        dom.authSubmitBtn.innerText = reg ? 'CREAR CUENTA' : 'ACCEDER';
-        dom.authPassword.autocomplete = reg ? 'new-password' : 'current-password';
-        dom.authHint.innerText = reg
-            ? 'Crea tu cuenta para jugar y guardar tu puntuación'
-            : 'Inicia sesión para jugar y guardar tu puntuación';
+    async function signIn() {
+        dom.googleBtn.disabled = true;
         hideAuthError();
-    }
-
-    async function submitAuth() {
-        hideAuthError();
-        const email = dom.authEmail.value.trim();
-        const password = dom.authPassword.value;
-        if (!email || !password) { showAuthError('Introduce email y contraseña.'); return; }
-
-        dom.authSubmitBtn.disabled = true;
         try {
-            const run = async () => {
-                if (authMode === 'register') {
-                    if (password !== dom.authPassword2.value) {
-                        showAuthError('Las contraseñas no coinciden.');
-                        return false;
-                    }
-                    const wantedName = dom.authUsername.value.trim();
-                    const cred = await auth.createUserWithEmailAndPassword(email, password);
-                    if (wantedName) {
-                        try { await cred.user.updateProfile({ displayName: wantedName }); } catch (e) { /* no crítico */ }
-                    }
-                } else {
-                    await auth.signInWithEmailAndPassword(email, password);
+            await auth.signInWithPopup(provider);
+        } catch (err) {
+            console.error('signInWithPopup falló:', err);
+            const canFallBackToRedirect = !inIframe && [
+                'auth/popup-blocked',
+                'auth/cancelled-popup-request',
+                'auth/operation-not-supported-in-this-environment',
+            ].includes(err.code);
+            if (canFallBackToRedirect) {
+                try {
+                    await auth.signInWithRedirect(provider);
+                    return; // la página navegará fuera; seguirá al volver
+                } catch (err2) {
+                    console.error('signInWithRedirect también falló:', err2);
+                    showAuthError(err2);
                 }
-                return true;
-            };
-            try {
-                if (!(await run())) return;
-            } catch (err) {
-                // Navegadores integrados / modo privado sin almacenamiento: sesión solo en memoria
-                if (['auth/web-storage-unsupported', 'auth/operation-not-supported-in-this-environment'].includes(err.code)) {
-                    await auth.setPersistence(firebase.auth.Auth.Persistence.NONE);
-                    if (!(await run())) return;
-                } else {
-                    throw err;
-                }
+            } else if (err.code !== 'auth/cancelled-popup-request') {
+                showAuthError(err);
             }
-            dom.authPassword.value = '';
-            dom.authPassword2.value = '';
-        } catch (err) {
-            console.error('Error de autenticación:', err);
-            showAuthError(err);
         } finally {
-            dom.authSubmitBtn.disabled = false;
+            dom.googleBtn.disabled = false;
         }
     }
 
-    async function resetPassword() {
-        hideAuthError();
-        const email = dom.authEmail.value.trim();
-        if (!email) { showAuthError('Escribe tu email y vuelve a pulsar aquí.'); return; }
-        try {
-            await auth.sendPasswordResetEmail(email);
-            showAuthError('Te hemos enviado un email para restablecer la contraseña.', true);
-        } catch (err) {
-            console.error('Error al enviar el email de recuperación:', err);
-            showAuthError(err);
-        }
-    }
+    // Si volvemos de un signInWithRedirect, recogemos aquí el resultado.
+    auth.getRedirectResult().catch((err) => {
+        console.error('Error al completar el login por redirect:', err);
+        showAuthError(err);
+    });
 
     function signOutUser() {
         auth.signOut().catch((err) => console.error('Error al cerrar sesión:', err));
@@ -413,8 +364,6 @@
             dom.profileBlock.classList.add('hidden');
             dom.rankingModal.classList.add('hidden');
             dom.myFriendCodeEl.classList.add('hidden');
-            dom.authPassword.value = '';
-            dom.authPassword2.value = '';
             window.dispatchEvent(new CustomEvent('bj-auth-changed', { detail: { signedIn: false } }));
             return;
         }
@@ -450,13 +399,7 @@
     // ---------------------------------------------------------------
     // 8) Listeners de la interfaz
     // ---------------------------------------------------------------
-    dom.tabLogin.addEventListener('click', () => setAuthMode('login'));
-    dom.tabRegister.addEventListener('click', () => setAuthMode('register'));
-    dom.authSubmitBtn.addEventListener('click', submitAuth);
-    dom.forgotBtn.addEventListener('click', resetPassword);
-    [dom.authUsername, dom.authEmail, dom.authPassword, dom.authPassword2].forEach((el) => {
-        el.addEventListener('keydown', (e) => { if (e.key === 'Enter') submitAuth(); });
-    });
+    dom.googleBtn.addEventListener('click', signIn);
     dom.signoutBtn.addEventListener('click', signOutUser);
 
     dom.rankingFab.addEventListener('click', openRankingModal);
@@ -530,7 +473,7 @@
     // ---------------------------------------------------------------
     window.BJFirebase = {
         isSignedIn: () => !!currentUser,
-        promptSignIn: () => { dom.loginBlock.classList.remove('hidden'); dom.authEmail.focus(); },
+        promptSignIn: () => dom.googleBtn.click(),
         reportScore,
         saveProgress,
     };
