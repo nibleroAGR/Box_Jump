@@ -294,10 +294,12 @@
             const ref = users().doc(currentUser.uid);
             const snap = await ref.get();
             const data = snap.exists ? snap.data() : { bestScore: 0, bestLevel: 1 };
-            if (score > (data.bestScore || 0)) {
+            const patch = {};
+            if (score > (data.bestScore || 0)) patch.bestScore = score;
+            if (level > (data.bestLevel || 1)) patch.bestLevel = level;
+            if (Object.keys(patch).length) {
                 await ref.update({
-                    bestScore: score,
-                    bestLevel: Math.max(level, data.bestLevel || 1),
+                    ...patch,
                     displayName: currentUser.displayName || 'Jugador',
                     photoURL: currentUser.photoURL || '',
                     updatedAt: firebase.firestore.FieldValue.serverTimestamp(),
@@ -322,9 +324,23 @@
     // ---------------------------------------------------------------
     // 5) Ranking (global y amigos)
     // ---------------------------------------------------------------
+    // Orden del ranking: primero el nivel máximo alcanzado y después los puntos.
+    const rankCompare = (a, b) =>
+        ((b.bestLevel || 1) - (a.bestLevel || 1)) || ((b.bestScore || 0) - (a.bestScore || 0));
+
     async function fetchGlobalTop(n) {
-        const snap = await users().orderBy('bestScore', 'desc').limit(n).get();
-        return snap.docs.map((d) => ({ uid: d.id, ...d.data() }));
+        let docs;
+        try {
+            // Requiere un índice compuesto (bestLevel desc, bestScore desc)
+            const snap = await users().orderBy('bestLevel', 'desc').orderBy('bestScore', 'desc').limit(n).get();
+            docs = snap.docs;
+        } catch (err) {
+            // Sin índice: se pide por nivel y se desempata por puntos en el cliente
+            console.warn('Falta el índice compuesto del ranking; usando ordenación en cliente.', err);
+            const snap = await users().orderBy('bestLevel', 'desc').limit(Math.max(n * 5, 100)).get();
+            docs = snap.docs;
+        }
+        return docs.map((d) => ({ uid: d.id, ...d.data() })).sort(rankCompare).slice(0, n);
     }
 
     async function fetchFriendsTop() {
@@ -338,7 +354,7 @@
                 if (fSnap.exists) list.push({ uid: fid, ...fSnap.data() });
             } catch (err) { /* amigo no accesible: se omite */ }
         }
-        list.sort((a, b) => (b.bestScore || 0) - (a.bestScore || 0));
+        list.sort(rankCompare);
         return list;
     }
 
@@ -382,7 +398,7 @@
                 <span class="rank-pos">${medal}</span>
                 <img class="rank-avatar" src="${it.photoURL || ''}" onerror="this.style.visibility='hidden'" />
                 <span class="rank-name">${safeName}</span>
-                <span class="rank-score">${it.bestScore || 0}</span>
+                <span class="rank-score"><small class="rank-level">Nv ${it.bestLevel || 1}</small>${it.bestScore || 0}</span>
             `;
             dom.rankingList.appendChild(row);
         });

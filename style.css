@@ -1004,3 +1004,17 @@ input, textarea {
 #close-settings-btn {
     margin-top: 0.5rem;
 }
+
+.rank-score {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+    line-height: 1.1;
+}
+
+.rank-level {
+    font-size: 0.6rem;
+    font-weight: 700;
+    color: var(--primary);
+    letter-spacing: 0.5px;
+}
