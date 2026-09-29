@@ -747,3 +747,10 @@ button:active {
 #forgot-btn {
     margin-top: 0;
 }
+
+/* iOS/Safari: con user-select:none global los inputs no dejan escribir */
+input, textarea {
+    -webkit-user-select: text;
+    user-select: text;
+    touch-action: auto;
+}

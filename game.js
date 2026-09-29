@@ -1325,12 +1325,17 @@ const triggerAction = (e) => {
         }
     }
 };
+// Los toques sobre botones, campos de texto, modales y pantallas de UI no deben
+// disparar el salto (y sobre todo no se les debe hacer preventDefault, o no
+// funcionan ni los clics ni el teclado en móvil).
+const isUiTarget = (e) => !!(e.target && e.target.closest &&
+    e.target.closest('button, input, textarea, a, .screen, #shop-fab, #ranking-fab, #shop-modal, #ranking-modal, .inv-slot'));
 window.addEventListener('mousedown', (e) => {
-    if (e.target.closest('#shop-fab') || e.target.closest('#shop-modal') || e.target.closest('.inv-slot')) return;
+    if (isUiTarget(e)) return;
     triggerAction(e);
 });
 window.addEventListener('touchstart', (e) => {
-    if (e.target.closest('#shop-fab') || e.target.closest('#shop-modal') || e.target.closest('.inv-slot')) return;
+    if (isUiTarget(e)) return;
     e.preventDefault();
     triggerAction(e);
 }, { passive: false });
