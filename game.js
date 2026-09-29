@@ -668,6 +668,7 @@ function initPlatforms(startLevel = 1, startScore = 0) {
     blackHoles = [];
     particles = [];
     aim.cancel();
+    zoom = 1; zoomOriginY = null;
     level = Math.max(1, startLevel);
     score = Math.max(0, startScore);
     platformsInLevel = 5 + Math.floor(level / 2);
@@ -1137,6 +1138,52 @@ function updateParticles() {
     }
 }
 
+// --- ZOOM DE CÁMARA en saltos largos ---
+// Mientras el jugador está en el aire, se aleja la cámara lo justo para que la
+// plataforma de la que salió siga visible como última plataforma de la pantalla
+// (abajo) y se acerca de nuevo al acercarse a la plataforma de destino.
+const ZOOM_MIN = 0.4;
+const ZOOM_PIVOT_Y = 0.25;   // fracción del alto usada como punto fijo del zoom
+const ZOOM_BOTTOM_MARGIN = 34;
+let zoom = 1;
+let zoomOriginY = null;
+
+function updateZoom() {
+    let target = 1;
+    if (!player.onGround && !aim.active && zoomOriginY !== null) {
+        const piv = height * ZOOM_PIVOT_Y;
+        const limit = height - ZOOM_BOTTOM_MARGIN;
+        if (zoomOriginY > limit) {
+            const sReq = Math.max(ZOOM_MIN, (limit - piv) / (zoomOriginY - piv));
+            target = sReq;
+            if (player.vy > 0) {
+                // Bajando: zoom in progresivo según se acerca a la plataforma de destino
+                const pb = player.y + player.h;
+                let landY = null;
+                for (const p of platforms) {
+                    if (p.type === 'flash' && !p.isVisible) continue;
+                    if (p.y >= pb - 4 && player.x + player.w + 20 > p.x && player.x - 20 < p.x + p.w) {
+                        if (landY === null || p.y < landY) landY = p.y;
+                    }
+                }
+                if (landY !== null) {
+                    const k = Math.min(1, Math.max(0, (landY - pb) / 260));
+                    target = 1 - (1 - sReq) * k;
+                }
+            }
+        }
+    }
+    if (aim.active) zoom = 1;
+    else zoom += (target - zoom) * (target < zoom ? 0.15 : 0.12);
+    if (Math.abs(zoom - 1) < 0.002) zoom = 1;
+}
+
+// Convierte coordenadas de pantalla a coordenadas de mundo (deshace el zoom)
+function screenToWorld(x, y) {
+    const cx = width / 2, cy = height * ZOOM_PIVOT_Y;
+    return { x: (x - cx) / zoom + cx, y: (y - cy) / zoom + cy };
+}
+
 function update() {
     if (!gameActive) return;
     if (aim.active) { aim.update(); updateParticles(); return; } // mundo congelado mientras se apunta
@@ -1163,8 +1210,10 @@ function update() {
     }
 
     const cameraThreshold = height * 0.4;
+    let camDiff = 0;
     if (player.y < cameraThreshold) {
         const diff = cameraThreshold - player.y;
+        camDiff = diff;
         player.y += diff;
         platforms.forEach(p => p.y += diff);
         props.forEach(pr => pr.y += diff);
@@ -1172,6 +1221,11 @@ function update() {
         powerups.forEach(pu => pu.y += diff);
         blackHoles.forEach(bh => bh.y += diff);
     }
+
+    // Plataforma de origen del salto (para el zoom); se mantiene aunque desaparezca
+    if (player.currentPlatform) zoomOriginY = player.currentPlatform.y;
+    else if (zoomOriginY !== null) zoomOriginY += camDiff;
+    updateZoom();
 
     updateParticles();
 }
@@ -1196,15 +1250,18 @@ function draw() {
         }
     }
 
+    // Todo el mundo del juego se dibuja con el zoom; la barra de precisión y el HUD no
+    ctx.save();
+    if (zoom !== 1) {
+        const zcx = width / 2, zcy = height * ZOOM_PIVOT_Y;
+        ctx.translate(zcx, zcy); ctx.scale(zoom, zoom); ctx.translate(-zcx, -zcy);
+    }
     blackHoles.forEach(bh => bh.draw());
     platforms.forEach(p => p.draw());
     powerups.forEach(pu => pu.draw());
     props.forEach(pr => pr.draw());
     obstacles.forEach(o => o.draw());
     player.draw();
-    precisionSystem.draw();
-    drawWindHUD();
-    aim.draw();
 
     // UI del Escudo / Powerups
     if (hasShield) {
@@ -1224,6 +1281,12 @@ function draw() {
         ctx.globalAlpha = p.life; ctx.fillStyle = p.color; ctx.fillRect(p.x, p.y, 4, 4);
     });
     ctx.globalAlpha = 1;
+    ctx.restore();
+
+    // HUD del canvas (sin zoom)
+    precisionSystem.draw();
+    drawWindHUD();
+    aim.draw();
 }
 
 function gameLoop() { update(); draw(); requestAnimationFrame(gameLoop); }
@@ -1293,8 +1356,9 @@ const triggerAction = (e) => {
     if (bombActive) {
         // Encontrar si se ha clicado una plataforma
         const rect = canvas.getBoundingClientRect();
-        const mouseX = (e.clientX || (e.touches ? e.touches[0].clientX : 0)) - rect.left;
-        const mouseY = (e.clientY || (e.touches ? e.touches[0].clientY : 0)) - rect.top;
+        const rawX = (e.clientX || (e.touches ? e.touches[0].clientX : 0)) - rect.left;
+        const rawY = (e.clientY || (e.touches ? e.touches[0].clientY : 0)) - rect.top;
+        const { x: mouseX, y: mouseY } = screenToWorld(rawX, rawY);
 
         const clickedPlatform = platforms.find(p =>
             !p.isGoal && mouseX > p.x && mouseX < p.x + p.w && mouseY > p.y && mouseY < p.y + p.h
