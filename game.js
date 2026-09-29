@@ -668,7 +668,7 @@ function initPlatforms(startLevel = 1, startScore = 0) {
     blackHoles = [];
     particles = [];
     aim.cancel();
-    zoom = 1; zoomOriginY = null;
+    originY = null; player.rocket = false;
     level = Math.max(1, startLevel);
     score = Math.max(0, startScore);
     platformsInLevel = 5 + Math.floor(level / 2);
@@ -1118,8 +1118,9 @@ function checkCollisions() {
                     player.vy = -Math.sqrt(2 * player.gravity * distY) * 1.4;
                     player.vx = 0;            // rebote vertical, sin ángulo
                     player.straightBounce = true; // sin viento hasta volver a tocar suelo
+                    player.rocket = true;         // estela de fuego mientras sube
                     player.onGround = false;
-                    player.angularVelocity = 0.25;
+                    player.angularVelocity = 0;   // sube recto, como un cohete
                     doubleJumpUsed = false;
                     showFeedback("¡RESORTE! 🚀");
                     createExplosion(p.x + p.w / 2, p.y, 0.8);
@@ -1130,64 +1131,56 @@ function checkCollisions() {
     });
 }
 
+// Estela de fuego y humo que sale de la base de la caja tras un autosalto
+function emitRocketFlame() {
+    const cx = player.x + player.w / 2, by = player.y + player.h;
+    const flame = ['#fff6b0', '#ffd23f', '#ff9a1f', '#ff5a14', '#ff2a00'];
+    for (let i = 0; i < 4; i++) {
+        particles.push({
+            x: cx + (Math.random() - 0.5) * 12, y: by + Math.random() * 4,
+            vx: (Math.random() - 0.5) * 1.6, vy: 2 + Math.random() * 3.5,
+            life: 1, decay: 0.045 + Math.random() * 0.035,
+            size: 4 + Math.random() * 6, grow: -0.12,
+            color: flame[Math.floor(Math.random() * flame.length)], fire: true
+        });
+    }
+    if (Math.random() < 0.6) {
+        const g = 120 + Math.floor(Math.random() * 60);
+        particles.push({
+            x: cx + (Math.random() - 0.5) * 10, y: by + 6,
+            vx: (Math.random() - 0.5) * 1.2, vy: 1 + Math.random() * 1.5,
+            life: 0.7, decay: 0.02 + Math.random() * 0.015,
+            size: 5 + Math.random() * 4, grow: 0.25,
+            color: `rgb(${g},${g},${g})`
+        });
+    }
+}
+
 function updateParticles() {
     for (let i = particles.length - 1; i >= 0; i--) {
         const p = particles[i];
-        p.x += p.vx; p.y += p.vy; p.life -= 0.02;
+        p.x += p.vx; p.y += p.vy; p.life -= (p.decay || 0.02);
+        if (p.grow) p.size = (p.size || 4) + p.grow;
         if (p.life <= 0) particles.splice(i, 1);
     }
 }
 
-// --- ZOOM DE CÁMARA en saltos largos ---
-// Mientras el jugador está en el aire, se aleja la cámara lo justo para que la
-// plataforma de la que salió siga visible como última plataforma de la pantalla
-// (abajo) y se acerca de nuevo al acercarse a la plataforma de destino.
-const ZOOM_MIN = 0.4;
-const ZOOM_PIVOT_Y = 0.25;   // fracción del alto usada como punto fijo del zoom
-const ZOOM_BOTTOM_MARGIN = 34;
-let zoom = 1;
-let zoomOriginY = null;
-
-function updateZoom() {
-    let target = 1;
-    if (!player.onGround && !aim.active && zoomOriginY !== null) {
-        const piv = height * ZOOM_PIVOT_Y;
-        const limit = height - ZOOM_BOTTOM_MARGIN;
-        if (zoomOriginY > limit) {
-            const sReq = Math.max(ZOOM_MIN, (limit - piv) / (zoomOriginY - piv));
-            target = sReq;
-            if (player.vy > 0) {
-                // Bajando: zoom in progresivo según se acerca a la plataforma de destino
-                const pb = player.y + player.h;
-                let landY = null;
-                for (const p of platforms) {
-                    if (p.type === 'flash' && !p.isVisible) continue;
-                    if (p.y >= pb - 4 && player.x + player.w + 20 > p.x && player.x - 20 < p.x + p.w) {
-                        if (landY === null || p.y < landY) landY = p.y;
-                    }
-                }
-                if (landY !== null) {
-                    const k = Math.min(1, Math.max(0, (landY - pb) / 260));
-                    target = 1 - (1 - sReq) * k;
-                }
-            }
-        }
-    }
-    if (aim.active) zoom = 1;
-    else zoom += (target - zoom) * (target < zoom ? 0.15 : 0.12);
-    if (Math.abs(zoom - 1) < 0.002) zoom = 1;
-}
-
-// Convierte coordenadas de pantalla a coordenadas de mundo (deshace el zoom)
-function screenToWorld(x, y) {
-    const cx = width / 2, cy = height * ZOOM_PIVOT_Y;
-    return { x: (x - cx) / zoom + cx, y: (y - cy) / zoom + cy };
-}
+// --- CÁMARA en saltos muy grandes ---
+// La plataforma de la que sale el jugador se mantiene visible abajo del todo
+// mientras dure el salto (sin zoom). Se sigue la plataforma aunque desaparezca.
+const ORIGIN_BOTTOM_MARGIN = 34;   // hueco mínimo bajo la plataforma de origen
+const PLAYER_MIN_Y = 0.12;         // el jugador nunca sube por encima de este % de la pantalla
+let originY = null;
 
 function update() {
     if (!gameActive) return;
     if (aim.active) { aim.update(); updateParticles(); return; } // mundo congelado mientras se apunta
     player.update();
+    // Cohete: mientras sube tras un autosalto
+    if (player.rocket) {
+        if (player.onGround || player.vy > -1) player.rocket = false;
+        else emitRocketFlame();
+    }
     precisionSystem.update();
 
     // Actualizar entidades
@@ -1209,11 +1202,23 @@ function update() {
         }
     }
 
+    // Plataforma de origen del salto (se mantiene aunque desaparezca)
+    if (player.currentPlatform) originY = player.currentPlatform.y;
+
     const cameraThreshold = height * 0.4;
-    let camDiff = 0;
     if (player.y < cameraThreshold) {
-        const diff = cameraThreshold - player.y;
-        camDiff = diff;
+        let diff = cameraThreshold - player.y;
+        // Salto muy grande: no bajar el mundo más de lo que deje la plataforma de
+        // origen visible abajo, salvo que el jugador se fuera a salir por arriba.
+        if (!player.onGround && originY !== null) {
+            const allowed = Math.max(0, (height - ORIGIN_BOTTOM_MARGIN) - originY);
+            const needForPlayer = Math.max(0, height * PLAYER_MIN_Y - player.y);
+            diff = Math.max(Math.min(diff, allowed), needForPlayer);
+        }
+        // Al aterrizar tras un salto enorme, la cámara se recoloca con suavidad (sin salto brusco)
+        if (player.onGround && diff > 8) diff = Math.max(8, diff * 0.2);
+        if (originY !== null && !player.currentPlatform) originY += diff;
+        particles.forEach(pt => pt.y += diff);
         player.y += diff;
         platforms.forEach(p => p.y += diff);
         props.forEach(pr => pr.y += diff);
@@ -1221,11 +1226,6 @@ function update() {
         powerups.forEach(pu => pu.y += diff);
         blackHoles.forEach(bh => bh.y += diff);
     }
-
-    // Plataforma de origen del salto (para el zoom); se mantiene aunque desaparezca
-    if (player.currentPlatform) zoomOriginY = player.currentPlatform.y;
-    else if (zoomOriginY !== null) zoomOriginY += camDiff;
-    updateZoom();
 
     updateParticles();
 }
@@ -1250,12 +1250,6 @@ function draw() {
         }
     }
 
-    // Todo el mundo del juego se dibuja con el zoom; la barra de precisión y el HUD no
-    ctx.save();
-    if (zoom !== 1) {
-        const zcx = width / 2, zcy = height * ZOOM_PIVOT_Y;
-        ctx.translate(zcx, zcy); ctx.scale(zoom, zoom); ctx.translate(-zcx, -zcy);
-    }
     blackHoles.forEach(bh => bh.draw());
     platforms.forEach(p => p.draw());
     powerups.forEach(pu => pu.draw());
@@ -1278,12 +1272,15 @@ function draw() {
     }
 
     particles.forEach(p => {
-        ctx.globalAlpha = p.life; ctx.fillStyle = p.color; ctx.fillRect(p.x, p.y, 4, 4);
+        const sz = p.size || 4;
+        ctx.globalAlpha = Math.max(0, p.life);
+        ctx.fillStyle = p.color;
+        if (p.fire) ctx.globalCompositeOperation = 'lighter';
+        ctx.fillRect(p.x - sz / 2, p.y - sz / 2, sz, sz);
+        if (p.fire) ctx.globalCompositeOperation = 'source-over';
     });
     ctx.globalAlpha = 1;
-    ctx.restore();
 
-    // HUD del canvas (sin zoom)
     precisionSystem.draw();
     drawWindHUD();
     aim.draw();
@@ -1358,7 +1355,7 @@ const triggerAction = (e) => {
         const rect = canvas.getBoundingClientRect();
         const rawX = (e.clientX || (e.touches ? e.touches[0].clientX : 0)) - rect.left;
         const rawY = (e.clientY || (e.touches ? e.touches[0].clientY : 0)) - rect.top;
-        const { x: mouseX, y: mouseY } = screenToWorld(rawX, rawY);
+        const mouseX = rawX, mouseY = rawY;
 
         const clickedPlatform = platforms.find(p =>
             !p.isGoal && mouseX > p.x && mouseX < p.x + p.w && mouseY > p.y && mouseY < p.y + p.h
