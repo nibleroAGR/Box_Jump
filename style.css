@@ -767,3 +767,114 @@ input, textarea {
     user-select: text;
     touch-action: auto;
 }
+
+
+/* --- Barra superior: nivel | objetos | puntos, repartida a todo el ancho --- */
+#top-bar {
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    padding: 0 12px;
+    display: grid;
+    grid-template-columns: 1fr auto 1fr;
+    gap: 8px;
+    align-items: start;
+    z-index: 101;
+    pointer-events: none;
+}
+
+#top-bar .hud-item {
+    position: static;
+    min-width: 0;
+    width: 100%;
+    padding: 8px 6px;
+    margin-top: env(safe-area-inset-top, 20px);
+}
+
+#top-bar #inventory-container {
+    position: static;
+    transform: none;
+    margin-top: 20px;
+    gap: 6px;
+}
+
+#top-bar .inv-slot {
+    width: 40px;
+    height: 40px;
+}
+
+/* Columna izquierda: nivel + menú (tres líneas) */
+#hud-left {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    margin-top: env(safe-area-inset-top, 20px);
+}
+
+#hud-left .hud-item {
+    margin-top: 0;
+}
+
+#hud-menu {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 8px;
+    pointer-events: auto;
+}
+
+#menu-toggle {
+    width: 100%;
+    height: 34px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 4px;
+    background: var(--glass);
+    backdrop-filter: blur(10px);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    cursor: pointer;
+    transition: border-color 0.2s, background 0.2s;
+}
+
+#menu-toggle span {
+    display: block;
+    width: 18px;
+    height: 2px;
+    border-radius: 2px;
+    background: rgba(255, 255, 255, 0.85);
+    transition: transform 0.2s, opacity 0.2s;
+}
+
+#menu-toggle.open {
+    border-color: var(--primary);
+    background: rgba(0, 242, 255, 0.1);
+}
+
+#menu-toggle.open span:nth-child(1) { transform: translateY(6px) rotate(45deg); }
+#menu-toggle.open span:nth-child(2) { opacity: 0; }
+#menu-toggle.open span:nth-child(3) { transform: translateY(-6px) rotate(-45deg); }
+
+#menu-panel {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 8px;
+    animation: popIn 0.2s ease-out;
+}
+
+#menu-panel #shop-fab,
+#menu-panel #ranking-fab {
+    position: static;
+    width: 46px;
+    height: 46px;
+    font-size: 1.3rem;
+}
+
+#menu-panel #shop-fab:hover,
+#menu-panel #ranking-fab:hover {
+    transform: scale(1.08);
+}

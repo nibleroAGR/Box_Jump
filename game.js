@@ -1329,7 +1329,7 @@ const triggerAction = (e) => {
 // disparar el salto (y sobre todo no se les debe hacer preventDefault, o no
 // funcionan ni los clics ni el teclado en móvil).
 const isUiTarget = (e) => !!(e.target && e.target.closest &&
-    e.target.closest('button, input, textarea, a, .screen, #shop-fab, #ranking-fab, #shop-modal, #ranking-modal, .inv-slot'));
+    e.target.closest('button, input, textarea, a, .screen, #hud-menu, #shop-fab, #ranking-fab, #shop-modal, #ranking-modal, .inv-slot'));
 window.addEventListener('mousedown', (e) => {
     if (isUiTarget(e)) return;
     triggerAction(e);
@@ -1403,6 +1403,19 @@ const shopHelpOverlay = document.getElementById('shop-help-overlay');
 const closeHelpBtn = document.getElementById('close-help-btn');
 
 shopFab.onclick = () => { gameActive = false; shopModal.classList.remove('hidden'); };
+
+// Menú de tres líneas: despliega el carrito (tienda) y los trofeos (clasificación)
+const menuToggle = document.getElementById('menu-toggle');
+const menuPanel = document.getElementById('menu-panel');
+function setMenuOpen(open) {
+    if (!menuToggle || !menuPanel) return;
+    menuPanel.classList.toggle('hidden', !open);
+    menuToggle.classList.toggle('open', open);
+    menuToggle.setAttribute('aria-expanded', String(open));
+}
+if (menuToggle) menuToggle.addEventListener('click', () => setMenuOpen(menuPanel.classList.contains('hidden')));
+[shopFab, rankingFab].forEach((el) => { if (el) el.addEventListener('click', () => setMenuOpen(false)); });
+
 closeShopBtn.onclick = () => { gameActive = true; shopModal.classList.add('hidden'); };
 
 shopInfoBtn.onclick = () => { shopHelpOverlay.classList.remove('hidden'); };

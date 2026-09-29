@@ -6,29 +6,40 @@
     <meta name="viewport"
         content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
     <title>Box Jump Precision</title>
-    <link rel="stylesheet" href="style.css?v=11">
+    <link rel="stylesheet" href="style.css?v=12">
 </head>
 
 <body>
     <div id="game-container">
         <canvas id="gameCanvas"></canvas>
         <div id="ui-overlay">
-            <div id="inventory-container">
-                <div class="inv-slot" id="slot-0" data-key="1"></div>
-                <div class="inv-slot" id="slot-1" data-key="2"></div>
-                <div class="inv-slot" id="slot-2" data-key="3"></div>
+            <div id="top-bar">
+                <div id="hud-left">
+                    <div id="level-container" class="hud-item left">
+                        <span class="hud-label">NIVEL</span>
+                        <span id="level-value">1</span>
+                    </div>
+                    <div id="hud-menu">
+                        <div id="menu-toggle" role="button" aria-label="Menú" aria-expanded="false">
+                            <span></span><span></span><span></span>
+                        </div>
+                        <div id="menu-panel" class="hidden">
+                            <div id="shop-fab" title="Tienda">🛒</div>
+                            <div id="ranking-fab" class="hidden" title="Clasificación">🏆</div>
+                        </div>
+                    </div>
+                </div>
+                <div id="inventory-container">
+                    <div class="inv-slot" id="slot-0" data-key="1"></div>
+                    <div class="inv-slot" id="slot-1" data-key="2"></div>
+                    <div class="inv-slot" id="slot-2" data-key="3"></div>
+                </div>
+                <div id="score-container" class="hud-item right">
+                    <span class="hud-label">PUNTOS</span>
+                    <span id="score-value">0</span>
+                    <span id="best-label">Mejor: <span id="best-value">0</span></span>
+                </div>
             </div>
-            <div id="level-container" class="hud-item left">
-                <span class="hud-label">NIVEL</span>
-                <span id="level-value">1</span>
-            </div>
-            <div id="score-container" class="hud-item right">
-                <span class="hud-label">PUNTOS</span>
-                <span id="score-value">0</span>
-                <span id="best-label">Mejor: <span id="best-value">0</span></span>
-            </div>
-            <div id="shop-fab">🛒</div>
-            <div id="ranking-fab" class="hidden">🏆</div>
             <div id="combo-container" class="hidden">
                 <span id="combo-value">COMBO x0</span>
             </div>
@@ -146,7 +157,7 @@
             </div>
         </div>
 
-        <script src="game.js?v=11"></script>
+        <script src="game.js?v=12"></script>
 
         <!-- SDK "compat" de Firebase: archivos únicos clásicos, sin import/export
              encadenados, para máxima compatibilidad entre navegadores/dispositivos. -->
