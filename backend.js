@@ -85,6 +85,10 @@
         myFriendCodeEl: $('my-friend-code'),
         myCodeValue: $('my-code-value'),
         copyCodeBtn: $('copy-code-btn'),
+        settingsCodeInput: $('settings-code-input'),
+        settingsCodeSave: $('settings-code-save'),
+        settingsCodeReset: $('settings-code-reset'),
+        settingsMsg: $('settings-msg'),
     };
 
     dom.profileAvatar.onerror = () => { dom.profileAvatar.style.visibility = 'hidden'; };
@@ -146,6 +150,36 @@
         }
     }
 
+    // Código de amigo: por defecto el nombre de usuario; editable. Es único
+    // (sin distinguir mayúsculas) y es lo que se comparte con los amigos.
+    async function ensureUniqueFriendCode(base, uidToExclude) {
+        const clean = (base || '').trim().slice(0, 20) || 'Jugador';
+        let suffix = 0;
+        while (true) {
+            const attempt = suffix === 0 ? clean : `${clean}${suffix}`;
+            try {
+                const snap = await users().where('friendCodeLower', '==', attempt.toLowerCase()).get();
+                if (!snap.docs.some((d) => d.id !== uidToExclude)) return attempt;
+            } catch (err) {
+                console.error('No se pudo comprobar el código de amigo:', err);
+                return attempt;
+            }
+            suffix++;
+        }
+    }
+
+    function showSettingsMsg(text, ok) {
+        if (!dom.settingsMsg) return;
+        dom.settingsMsg.innerText = text || '';
+        dom.settingsMsg.style.color = ok ? '#5dffb0' : '#ff6b6b';
+        dom.settingsMsg.classList.toggle('hidden', !text);
+    }
+
+    function showFriendCode(code) {
+        if (dom.myCodeValue) dom.myCodeValue.innerText = code || '-';
+        if (dom.settingsCodeInput) dom.settingsCodeInput.value = code || '';
+    }
+
     // ---------------------------------------------------------------
     // 4) Perfil del jugador en Firestore
     // ---------------------------------------------------------------
@@ -159,6 +193,9 @@
             const profile = {
                 displayName: user.displayName || emailName || 'Jugador',
                 username,
+                friendCode: username,
+                friendCodeLower: username.toLowerCase(),
+                friendCodeCustom: false,
                 photoURL: user.photoURL || '',
                 bestScore: 0,
                 bestLevel: 1,
@@ -182,6 +219,13 @@
         if (!data.username) {
             patch.username = await ensureUniqueUsername(user.displayName || emailName, user.uid);
         }
+        if (!data.friendCode || !data.friendCodeLower) {
+            const base = data.friendCode || patch.username || data.username;
+            const code = await ensureUniqueFriendCode(base, user.uid);
+            patch.friendCode = code;
+            patch.friendCodeLower = code.toLowerCase();
+            patch.friendCodeCustom = !!data.friendCodeCustom;
+        }
         await ref.update(patch);
         return { ...data, ...patch };
     }
@@ -189,8 +233,59 @@
     async function saveUsername(newName) {
         if (!currentUser) return null;
         const unique = await ensureUniqueUsername(newName, currentUser.uid);
-        await users().doc(currentUser.uid).update({ username: unique });
+        const ref = users().doc(currentUser.uid);
+        const patch = { username: unique };
+        try {
+            const snap = await ref.get();
+            const data = snap.exists ? snap.data() : {};
+            // Si no ha personalizado el código, sigue al nombre de usuario
+            if (!data.friendCodeCustom) {
+                const code = await ensureUniqueFriendCode(unique, currentUser.uid);
+                patch.friendCode = code;
+                patch.friendCodeLower = code.toLowerCase();
+                patch.friendCodeCustom = false;
+            }
+        } catch (err) { console.error('No se pudo actualizar el código de amigo:', err); }
+        await ref.update(patch);
+        if (patch.friendCode) showFriendCode(patch.friendCode);
         return unique;
+    }
+
+    async function saveFriendCode(rawCode) {
+        if (!currentUser) return { ok: false, msg: 'Inicia sesión primero' };
+        const code = (rawCode || '').trim();
+        if (code.length < 3 || code.length > 20) return { ok: false, msg: 'Debe tener entre 3 y 20 caracteres' };
+        if (!/^[\p{L}\p{N}_.\-]+$/u.test(code)) return { ok: false, msg: 'Solo letras, números, _ . -' };
+        try {
+            const snap = await users().where('friendCodeLower', '==', code.toLowerCase()).get();
+            if (snap.docs.some((d) => d.id !== currentUser.uid)) return { ok: false, msg: 'Ese código ya está en uso' };
+            await users().doc(currentUser.uid).update({
+                friendCode: code,
+                friendCodeLower: code.toLowerCase(),
+                friendCodeCustom: true,
+            });
+            showFriendCode(code);
+            return { ok: true, code };
+        } catch (err) {
+            console.error('No se pudo guardar el código de amigo:', err);
+            return { ok: false, msg: 'Error al guardar el código' };
+        }
+    }
+
+    async function resetFriendCode() {
+        if (!currentUser) return { ok: false, msg: 'Inicia sesión primero' };
+        try {
+            const ref = users().doc(currentUser.uid);
+            const snap = await ref.get();
+            const username = (snap.exists && snap.data().username) || currentUser.displayName || 'Jugador';
+            const code = await ensureUniqueFriendCode(username, currentUser.uid);
+            await ref.update({ friendCode: code, friendCodeLower: code.toLowerCase(), friendCodeCustom: false });
+            showFriendCode(code);
+            return { ok: true, code };
+        } catch (err) {
+            console.error('No se pudo restablecer el código de amigo:', err);
+            return { ok: false, msg: 'Error al restablecer el código' };
+        }
     }
 
     async function reportScore(score, level) {
@@ -253,10 +348,17 @@
         if (!clean) return { ok: false, msg: 'Código vacío' };
         if (clean === currentUser.uid) return { ok: false, msg: 'No puedes añadirte a ti mismo' };
         try {
-            const fSnap = await users().doc(clean).get();
-            if (!fSnap.exists) return { ok: false, msg: 'No existe ningún jugador con ese código' };
+            let friendUid = null;
+            const q = await users().where('friendCodeLower', '==', clean.toLowerCase()).limit(1).get();
+            if (!q.empty) friendUid = q.docs[0].id;
+            if (!friendUid) { // compatibilidad con códigos antiguos (uid)
+                const legacy = await users().doc(clean).get();
+                if (legacy.exists) friendUid = legacy.id;
+            }
+            if (!friendUid) return { ok: false, msg: 'No existe ningún jugador con ese código' };
+            if (friendUid === currentUser.uid) return { ok: false, msg: 'No puedes añadirte a ti mismo' };
             await users().doc(currentUser.uid).update({
-                friends: firebase.firestore.FieldValue.arrayUnion(clean),
+                friends: firebase.firestore.FieldValue.arrayUnion(friendUid),
             });
             return { ok: true };
         } catch (err) {
@@ -364,6 +466,8 @@
             dom.profileBlock.classList.add('hidden');
             dom.rankingModal.classList.add('hidden');
             dom.myFriendCodeEl.classList.add('hidden');
+            showFriendCode('');
+            showSettingsMsg('');
             window.dispatchEvent(new CustomEvent('bj-auth-changed', { detail: { signedIn: false } }));
             return;
         }
@@ -375,10 +479,11 @@
         dom.usernameEditRow.classList.add('hidden');
         dom.usernameRow.classList.remove('hidden');
         dom.myFriendCodeEl.classList.remove('hidden');
-        dom.myCodeValue.innerText = user.uid;
+        showFriendCode('');
 
         try {
             const profile = await loadOrCreateProfile(user);
+            showFriendCode(profile.friendCode || profile.username || '');
             dom.profileName.innerText = profile.username || user.displayName || 'Jugador';
             dom.profileAvatar.src = profile.photoURL || avatarFor(profile.username || user.email);
             window.dispatchEvent(new CustomEvent('bj-auth-changed', {
@@ -430,9 +535,22 @@
         }
     });
 
+    dom.settingsCodeSave.addEventListener('click', async () => {
+        dom.settingsCodeSave.disabled = true;
+        const res = await saveFriendCode(dom.settingsCodeInput.value);
+        showSettingsMsg(res.ok ? 'Código guardado ✔' : res.msg, res.ok);
+        dom.settingsCodeSave.disabled = false;
+    });
+    dom.settingsCodeReset.addEventListener('click', async () => {
+        dom.settingsCodeReset.disabled = true;
+        const res = await resetFriendCode();
+        showSettingsMsg(res.ok ? 'Código restablecido al nombre de usuario' : res.msg, res.ok);
+        dom.settingsCodeReset.disabled = false;
+    });
+    dom.settingsCodeInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') dom.settingsCodeSave.click(); });
     dom.copyCodeBtn.addEventListener('click', () => {
         if (currentUser && navigator.clipboard) {
-            navigator.clipboard.writeText(currentUser.uid).catch(() => {});
+            navigator.clipboard.writeText(dom.myCodeValue.innerText).catch(() => {});
         }
     });
 

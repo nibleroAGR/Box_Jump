@@ -145,11 +145,12 @@ const player = {
     update() {
         // Viento si no está en el suelo
         if (!this.onGround) {
-            this.vx += windForce;
+            if (!this.straightBounce) this.vx += windForce;
             this.vy += this.gravity * gravityFactor;
             this.rotation += this.angularVelocity;
         } else {
             this.vy = 0;
+            this.straightBounce = false;
             // Fricción según plataforma
             let friction = 0.85;
             if (this.currentPlatform && this.currentPlatform.type === 'ice') friction = 0.98;
@@ -214,12 +215,15 @@ const player = {
 // --- PRECISION SYSTEM ---
 const precisionSystem = {
     ball: { x: 0, y: 0, radius: 10, active: false, speed: 4 },
-    canal: { x: 0, y: 0, w: 40, h: 0, rightPadding: 25 },
+    side: 'right', // 'left' | 'right' (configurable)
+    canal: { x: 0, y: 0, w: 40, h: 0, rightPadding: 25, leftPadding: 25 },
     targetArea: { y: 0, h: 200, greenScale: 0.2 },
 
     init() {
         this.canal.w = 40;
-        this.canal.x = width - this.canal.w - this.canal.rightPadding;
+        this.canal.x = this.side === 'left'
+            ? this.canal.leftPadding
+            : width - this.canal.w - this.canal.rightPadding;
         this.canal.y = 40;
         this.canal.h = height - 80;
         this.targetArea.y = height - this.targetArea.h - 120;
@@ -313,7 +317,7 @@ const precisionSystem = {
         const tx = this.canal.x, ty = this.canal.y, tw = this.canal.w, th = this.canal.h;
 
         // Progress bar
-        const progressX = tx + tw + 10;
+        const progressX = this.side === 'left' ? tx - 13 : tx + tw + 10;
         ctx.fillStyle = 'rgba(255, 255, 255, 0.05)';
         ctx.fillRect(progressX, ty, 3, th);
         const progressFill = Math.min(1, platformsReached / platformsInLevel);
@@ -678,8 +682,9 @@ function initPlatforms(startLevel = 1, startScore = 0) {
     updateScoreDisplay();
     updateComboDisplay();
 
-    platforms.push(new Platform(width / 2 - 50, height - 150, 100, 20));
-    player.x = width / 2 - player.w / 2;
+    const startCx = width / 2 + (precisionSystem.side === 'left' ? 30 : 0);
+    platforms.push(new Platform(startCx - 50, height - 150, 100, 20));
+    player.x = startCx - player.w / 2;
     player.y = height - 150 - player.h;
     player.vx = 0;
     player.vy = 0;
@@ -697,7 +702,8 @@ function spawnNextPlatform(forceGoal = false) {
     const marginY = 110 + Math.random() * 90;
     const nextY = last.y - marginY;
     const nextW = Math.max(50, 80 + Math.random() * 40 - (level * 0.5));
-    const nextX = 30 + Math.random() * (width - nextW - 80);
+    // Deja libre el lado donde está la barra de precisión
+    const nextX = (precisionSystem.side === 'left' ? 50 : 30) + Math.random() * (width - nextW - 80);
 
     totalPlatformGlobalCount++;
 
@@ -1109,7 +1115,8 @@ function checkCollisions() {
                     // Resorte: rebote automático hacia arriba, no requiere precisión del jugador
                     const distY = 220;
                     player.vy = -Math.sqrt(2 * player.gravity * distY) * 1.4;
-                    player.vx *= 0.3;
+                    player.vx = 0;            // rebote vertical, sin ángulo
+                    player.straightBounce = true; // sin viento hasta volver a tocar suelo
                     player.onGround = false;
                     player.angularVelocity = 0.25;
                     doubleJumpUsed = false;
@@ -1329,7 +1336,7 @@ const triggerAction = (e) => {
 // disparar el salto (y sobre todo no se les debe hacer preventDefault, o no
 // funcionan ni los clics ni el teclado en móvil).
 const isUiTarget = (e) => !!(e.target && e.target.closest &&
-    e.target.closest('button, input, textarea, a, .screen, #hud-menu, #shop-fab, #ranking-fab, #shop-modal, #ranking-modal, .inv-slot'));
+    e.target.closest('button, input, textarea, a, .screen, #hud-menu, #shop-fab, #ranking-fab, #settings-fab, #shop-modal, #ranking-modal, .inv-slot'));
 window.addEventListener('mousedown', (e) => {
     if (isUiTarget(e)) return;
     triggerAction(e);
@@ -1415,6 +1422,46 @@ function setMenuOpen(open) {
 }
 if (menuToggle) menuToggle.addEventListener('click', () => setMenuOpen(menuPanel.classList.contains('hidden')));
 [shopFab, rankingFab].forEach((el) => { if (el) el.addEventListener('click', () => setMenuOpen(false)); });
+
+// --- Configuración (código de amigo + lado de la barra de precisión) ---
+const settingsFab = document.getElementById('settings-fab');
+const settingsModal = document.getElementById('settings-modal');
+const closeSettingsBtn = document.getElementById('close-settings-btn');
+const sideLeftBtn = document.getElementById('side-left');
+const sideRightBtn = document.getElementById('side-right');
+let settingsWasPlaying = false;
+
+function setBarSide(side, persist = true) {
+    precisionSystem.side = side === 'left' ? 'left' : 'right';
+    if (persist) {
+        try { localStorage.setItem('boxjump_bar_side', precisionSystem.side); } catch (e) { /* no disponible */ }
+    }
+    if (width) {
+        precisionSystem.init();
+        if (precisionSystem.ball.active) {
+            precisionSystem.ball.x = precisionSystem.canal.x + precisionSystem.canal.w / 2;
+        }
+    }
+    if (sideLeftBtn) sideLeftBtn.classList.toggle('active', precisionSystem.side === 'left');
+    if (sideRightBtn) sideRightBtn.classList.toggle('active', precisionSystem.side === 'right');
+}
+let savedSide = 'right';
+try { savedSide = localStorage.getItem('boxjump_bar_side') || 'right'; } catch (e) { /* por defecto */ }
+setBarSide(savedSide, false);
+if (sideLeftBtn) sideLeftBtn.addEventListener('click', () => setBarSide('left'));
+if (sideRightBtn) sideRightBtn.addEventListener('click', () => setBarSide('right'));
+
+if (settingsFab) settingsFab.addEventListener('click', () => {
+    setMenuOpen(false);
+    settingsWasPlaying = gameActive;
+    gameActive = false;
+    settingsModal.classList.remove('hidden');
+});
+if (closeSettingsBtn) closeSettingsBtn.addEventListener('click', () => {
+    settingsModal.classList.add('hidden');
+    if (settingsWasPlaying) gameActive = true;
+    settingsWasPlaying = false;
+});
 
 closeShopBtn.onclick = () => { gameActive = true; shopModal.classList.add('hidden'); };
 

@@ -878,3 +878,129 @@ input, textarea {
 #menu-panel #ranking-fab:hover {
     transform: scale(1.08);
 }
+
+
+/* --- Botón de configuración del menú --- */
+#settings-fab {
+    width: 46px;
+    height: 46px;
+    background: linear-gradient(135deg, var(--primary), #00a2ff);
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 1.3rem;
+    box-shadow: 0 5px 20px rgba(0, 0, 0, 0.3);
+    cursor: pointer;
+    pointer-events: auto;
+    transition: transform 0.2s;
+}
+
+#settings-fab:hover {
+    transform: scale(1.08) rotate(20deg);
+}
+
+/* --- Modal de configuración --- */
+#settings-modal {
+    background: rgba(5, 11, 24, 0.95);
+    backdrop-filter: blur(20px);
+}
+
+.settings-card {
+    max-width: 340px;
+    width: 88%;
+    padding: 2rem 1.5rem;
+    text-align: left;
+}
+
+.settings-card h2 {
+    text-align: center;
+    margin-bottom: 1rem;
+}
+
+.settings-section {
+    margin-bottom: 1.2rem;
+    padding-bottom: 1.2rem;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.settings-section h3 {
+    font-size: 0.8rem;
+    letter-spacing: 1px;
+    color: var(--primary);
+    margin-bottom: 0.4rem;
+}
+
+.settings-help {
+    font-size: 0.72rem;
+    opacity: 0.6;
+    line-height: 1.4;
+    margin-bottom: 0.7rem;
+}
+
+.settings-row {
+    display: flex;
+    gap: 8px;
+}
+
+.settings-input {
+    flex: 1;
+    min-width: 0;
+    background: var(--glass);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 0.6rem;
+    color: #fff;
+    font-size: 0.85rem;
+    outline: none;
+}
+
+.settings-input:focus {
+    border-color: var(--primary);
+}
+
+#settings-code-save {
+    width: auto;
+    margin-top: 0;
+    padding: 0.6rem 0.9rem;
+    font-size: 0.75rem;
+}
+
+#settings-code-reset {
+    width: 100%;
+    margin-top: 0.5rem;
+    padding: 0.4rem;
+    font-size: 0.72rem;
+}
+
+.settings-msg {
+    font-size: 0.75rem;
+    margin-top: 0.5rem;
+    text-align: center;
+}
+
+.side-toggle {
+    display: flex;
+    gap: 8px;
+    margin-top: 0.6rem;
+}
+
+.side-btn {
+    flex: 1;
+    margin-top: 0;
+    padding: 0.7rem 0.3rem;
+    font-size: 0.72rem;
+    background: var(--glass);
+    color: rgba(255, 255, 255, 0.6);
+    border: 1px solid var(--border);
+    box-shadow: none;
+}
+
+.side-btn.active {
+    background: linear-gradient(135deg, var(--primary), #00a2ff);
+    color: #050b18;
+}
+
+#close-settings-btn {
+    margin-top: 0.5rem;
+}

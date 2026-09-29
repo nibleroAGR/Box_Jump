@@ -6,7 +6,7 @@
     <meta name="viewport"
         content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
     <title>Box Jump Precision</title>
-    <link rel="stylesheet" href="style.css?v=12">
+    <link rel="stylesheet" href="style.css?v=13">
 </head>
 
 <body>
@@ -26,6 +26,7 @@
                         <div id="menu-panel" class="hidden">
                             <div id="shop-fab" title="Tienda">🛒</div>
                             <div id="ranking-fab" class="hidden" title="Clasificación">🏆</div>
+                            <div id="settings-fab" title="Configuración">⚙️</div>
                         </div>
                     </div>
                 </div>
@@ -62,6 +63,30 @@
                         <button id="copy-code-btn" title="Copiar código">📋</button>
                     </div>
                     <button id="close-ranking-btn">CERRAR</button>
+                </div>
+            </div>
+            <div id="settings-modal" class="screen hidden">
+                <div class="glass-card settings-card">
+                    <h2>CONFIGURACIÓN</h2>
+                    <div class="settings-section">
+                        <h3>Código de amigo</h3>
+                        <p class="settings-help">Es el código que compartes con tus amigos. Por defecto es tu nombre de usuario.</p>
+                        <div class="settings-row">
+                            <input id="settings-code-input" class="settings-input" type="text" maxlength="20"
+                                placeholder="Tu código" autocomplete="off" autocapitalize="off" />
+                            <button id="settings-code-save" type="button">GUARDAR</button>
+                        </div>
+                        <button id="settings-code-reset" class="secondary-btn ghost-btn" type="button">Usar mi nombre de usuario</button>
+                        <p id="settings-msg" class="settings-msg hidden"></p>
+                    </div>
+                    <div class="settings-section">
+                        <h3>Barra de precisión</h3>
+                        <div class="side-toggle">
+                            <button id="side-left" class="side-btn" type="button">◀ IZQUIERDA</button>
+                            <button id="side-right" class="side-btn active" type="button">DERECHA ▶</button>
+                        </div>
+                    </div>
+                    <button id="close-settings-btn" type="button">CERRAR</button>
                 </div>
             </div>
             <div id="msg-overlay" class="hidden">
@@ -157,14 +182,14 @@
             </div>
         </div>
 
-        <script src="game.js?v=12"></script>
+        <script src="game.js?v=13"></script>
 
         <!-- SDK "compat" de Firebase: archivos únicos clásicos, sin import/export
              encadenados, para máxima compatibilidad entre navegadores/dispositivos. -->
         <script src="https://www.gstatic.com/firebasejs/10.13.2/firebase-app-compat.js"></script>
         <script src="https://www.gstatic.com/firebasejs/10.13.2/firebase-auth-compat.js"></script>
         <script src="https://www.gstatic.com/firebasejs/10.13.2/firebase-firestore-compat.js"></script>
-        <script src="backend.js?v=4"></script>
+        <script src="backend.js?v=5"></script>
     </div>
 </body>
 
