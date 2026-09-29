@@ -23,6 +23,7 @@ body {
     color: white;
     overflow: hidden;
     height: 100vh;
+    height: 100dvh;
     width: 100vw;
     display: flex;
     justify-content: center;
@@ -579,11 +580,23 @@ canvas {
     inset: 0;
     display: flex;
     justify-content: center;
-    align-items: center;
+    align-items: flex-start;
+    overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
     background: rgba(0, 0, 0, 0.6);
     backdrop-filter: blur(5px);
     pointer-events: auto;
     z-index: 200;
+}
+
+/* margin:auto centra la tarjeta si cabe y permite hacer scroll si no
+   (móviles pequeños / teclado abierto) */
+.screen > .glass-card {
+    margin: auto;
+}
+
+#start-screen .glass-card {
+    padding: 2rem 1.5rem;
 }
 
 .glass-card {

@@ -31,9 +31,23 @@
         measurementId: "G-RZ45FWBDWY",
     };
 
+    // Si el SDK de Firebase no se ha cargado (red, bloqueador, etc.) lo
+    // decimos en pantalla en vez de fallar en silencio.
+    if (typeof firebase === 'undefined' || typeof firebase.auth !== 'function' || typeof firebase.firestore !== 'function') {
+        const msg = document.getElementById('auth-debug-msg');
+        if (msg) {
+            msg.innerText = 'No se pudo cargar Firebase (revisa tu conexión o desactiva bloqueadores) y recarga la página.';
+            msg.classList.remove('hidden');
+        }
+        console.error('Firebase SDK no disponible');
+        return;
+    }
+
     firebase.initializeApp(firebaseConfig);
     const auth = firebase.auth();
     const db = firebase.firestore();
+    // Ayuda en redes móviles / proxies donde el canal normal de Firestore falla
+    try { db.settings({ experimentalAutoDetectLongPolling: true, merge: true }); } catch (e) { /* no crítico */ }
     const users = () => db.collection('users');
 
     // ---------------------------------------------------------------
@@ -107,7 +121,10 @@
         if (!dom.authDebugMsg) return;
         let text;
         if (typeof err === 'string') text = err;
-        else text = (err && AUTH_ERRORS[err.code]) || (err && (err.message || err.code)) || 'Error desconocido';
+        else {
+            const base = (err && AUTH_ERRORS[err.code]) || (err && (err.message || err.code)) || 'Error desconocido';
+            text = (err && err.code && !base.includes(err.code)) ? `${base} (${err.code})` : base;
+        }
         dom.authDebugMsg.style.color = isInfo ? '#5dffb0' : '#ff6b6b';
         dom.authDebugMsg.innerText = text;
         dom.authDebugMsg.classList.remove('hidden');
@@ -331,18 +348,32 @@
 
         dom.authSubmitBtn.disabled = true;
         try {
-            if (authMode === 'register') {
-                if (password !== dom.authPassword2.value) {
-                    showAuthError('Las contraseñas no coinciden.');
-                    return;
+            const run = async () => {
+                if (authMode === 'register') {
+                    if (password !== dom.authPassword2.value) {
+                        showAuthError('Las contraseñas no coinciden.');
+                        return false;
+                    }
+                    const wantedName = dom.authUsername.value.trim();
+                    const cred = await auth.createUserWithEmailAndPassword(email, password);
+                    if (wantedName) {
+                        try { await cred.user.updateProfile({ displayName: wantedName }); } catch (e) { /* no crítico */ }
+                    }
+                } else {
+                    await auth.signInWithEmailAndPassword(email, password);
                 }
-                const wantedName = dom.authUsername.value.trim();
-                const cred = await auth.createUserWithEmailAndPassword(email, password);
-                if (wantedName) {
-                    try { await cred.user.updateProfile({ displayName: wantedName }); } catch (e) { /* no crítico */ }
+                return true;
+            };
+            try {
+                if (!(await run())) return;
+            } catch (err) {
+                // Navegadores integrados / modo privado sin almacenamiento: sesión solo en memoria
+                if (['auth/web-storage-unsupported', 'auth/operation-not-supported-in-this-environment'].includes(err.code)) {
+                    await auth.setPersistence(firebase.auth.Auth.Persistence.NONE);
+                    if (!(await run())) return;
+                } else {
+                    throw err;
                 }
-            } else {
-                await auth.signInWithEmailAndPassword(email, password);
             }
             dom.authPassword.value = '';
             dom.authPassword2.value = '';
