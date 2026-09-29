@@ -694,3 +694,56 @@ button:active {
         transform: scale(1.5);
     }
 }
+
+/* --- Login con email y contraseña --- */
+.auth-tabs {
+    display: flex;
+    gap: 8px;
+    margin-bottom: 1rem;
+}
+
+.auth-tab {
+    flex: 1;
+    margin-top: 0;
+    padding: 0.6rem;
+    font-size: 0.75rem;
+    background: var(--glass);
+    color: rgba(255, 255, 255, 0.6);
+    border: 1px solid var(--border);
+    box-shadow: none;
+}
+
+.auth-tab.active {
+    background: linear-gradient(135deg, var(--primary), #00a2ff);
+    color: #050b18;
+}
+
+#auth-form {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+
+.auth-input {
+    width: 100%;
+    background: var(--glass);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 0.75rem;
+    color: #fff;
+    font-size: 0.9rem;
+    user-select: text;
+    outline: none;
+}
+
+.auth-input:focus {
+    border-color: var(--primary);
+}
+
+#auth-submit-btn {
+    margin-top: 0.5rem;
+}
+
+#forgot-btn {
+    margin-top: 0;
+}

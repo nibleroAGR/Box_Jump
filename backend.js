@@ -4,6 +4,8 @@
    sin import/export encadenados) para máxima compatibilidad entre
    navegadores y dispositivos.
 
+   Login: email y contraseña (Firebase Auth).
+
    Contrato con game.js (no se toca game.js, solo se respeta esta API):
      - window.BJFirebase.isSignedIn()          -> boolean
      - window.BJFirebase.promptSignIn()        -> abre el login
@@ -32,13 +34,7 @@
     firebase.initializeApp(firebaseConfig);
     const auth = firebase.auth();
     const db = firebase.firestore();
-    const provider = new firebase.auth.GoogleAuthProvider();
     const users = () => db.collection('users');
-
-    // ¿Estamos dentro de un iframe? Si es así, signInWithRedirect no
-    // funciona (Google no permite el login embebido en un frame).
-    let inIframe = false;
-    try { inIframe = window.self !== window.top; } catch (e) { inIframe = true; }
 
     // ---------------------------------------------------------------
     // 2) Referencias al DOM
@@ -50,7 +46,15 @@
         profileBlock: $('profile-block'),
         profileAvatar: $('profile-avatar'),
         profileName: $('profile-name'),
-        googleBtn: $('google-signin-btn'),
+        tabLogin: $('tab-login'),
+        tabRegister: $('tab-register'),
+        authUsername: $('auth-username'),
+        authEmail: $('auth-email'),
+        authPassword: $('auth-password'),
+        authPassword2: $('auth-password2'),
+        authSubmitBtn: $('auth-submit-btn'),
+        forgotBtn: $('forgot-btn'),
+        authHint: $('auth-hint'),
         signoutBtn: $('signout-btn'),
         authDebugMsg: $('auth-debug-msg'),
         rankingFab: $('ranking-fab'),
@@ -75,11 +79,36 @@
     dom.profileAvatar.onerror = () => { dom.profileAvatar.style.visibility = 'hidden'; };
 
     let currentUser = null;
+    let authMode = 'login'; // 'login' | 'register'
+
+    function avatarFor(name) {
+        const letter = ((name || 'J').trim()[0] || 'J').toUpperCase().replace(/[<>&"']/g, 'J');
+        const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64"><rect width="64" height="64" fill="#101e3a"/><text x="32" y="43" font-size="32" font-family="Arial" font-weight="700" fill="#00f2ff" text-anchor="middle">${letter}</text></svg>`;
+        return 'data:image/svg+xml;utf8,' + encodeURIComponent(svg);
+    }
     let activeRankingTab = 'global';
 
-    function showAuthError(err) {
+    const AUTH_ERRORS = {
+        'auth/invalid-email': 'El email no es válido.',
+        'auth/missing-email': 'Introduce tu email.',
+        'auth/missing-password': 'Introduce tu contraseña.',
+        'auth/user-not-found': 'No existe ninguna cuenta con ese email.',
+        'auth/wrong-password': 'Contraseña incorrecta.',
+        'auth/invalid-credential': 'Email o contraseña incorrectos.',
+        'auth/invalid-login-credentials': 'Email o contraseña incorrectos.',
+        'auth/email-already-in-use': 'Ya existe una cuenta con ese email.',
+        'auth/weak-password': 'La contraseña debe tener al menos 6 caracteres.',
+        'auth/too-many-requests': 'Demasiados intentos. Espera un momento e inténtalo de nuevo.',
+        'auth/network-request-failed': 'Error de red. Comprueba tu conexión.',
+        'auth/user-disabled': 'Esta cuenta ha sido deshabilitada.',
+        'auth/operation-not-allowed': 'El acceso con email/contraseña no está activado en Firebase.',
+    };
+    function showAuthError(err, isInfo) {
         if (!dom.authDebugMsg) return;
-        const text = (err && (err.code || err.message)) ? `Error: ${err.code || ''} ${err.message || ''}`.trim() : String(err);
+        let text;
+        if (typeof err === 'string') text = err;
+        else text = (err && AUTH_ERRORS[err.code]) || (err && (err.message || err.code)) || 'Error desconocido';
+        dom.authDebugMsg.style.color = isInfo ? '#5dffb0' : '#ff6b6b';
         dom.authDebugMsg.innerText = text;
         dom.authDebugMsg.classList.remove('hidden');
     }
@@ -117,9 +146,10 @@
         const snap = await ref.get();
 
         if (!snap.exists) {
-            const username = await ensureUniqueUsername(user.displayName, user.uid);
+            const emailName = (user.email || '').split('@')[0];
+            const username = await ensureUniqueUsername(user.displayName || emailName, user.uid);
             const profile = {
-                displayName: user.displayName || 'Jugador',
+                displayName: user.displayName || emailName || 'Jugador',
                 username,
                 photoURL: user.photoURL || '',
                 bestScore: 0,
@@ -136,12 +166,13 @@
         // El perfil ya existe: refrescamos nombre/foto de Google, pero
         // respetamos el nombre de usuario editable que haya elegido.
         const data = snap.data();
+        const emailName = (user.email || '').split('@')[0];
         const patch = {
-            displayName: user.displayName || 'Jugador',
+            displayName: user.displayName || emailName || 'Jugador',
             photoURL: user.photoURL || '',
         };
         if (!data.username) {
-            patch.username = await ensureUniqueUsername(user.displayName, user.uid);
+            patch.username = await ensureUniqueUsername(user.displayName || emailName, user.uid);
         }
         await ref.update(patch);
         return { ...data, ...patch };
@@ -274,51 +305,71 @@
     }
 
     // ---------------------------------------------------------------
-    // 6) Login / logout con Google
+    // 6) Registro / login / logout con email y contraseña
     // ---------------------------------------------------------------
-    async function signIn() {
-        dom.googleBtn.disabled = true;
+    function setAuthMode(mode) {
+        authMode = mode;
+        const reg = mode === 'register';
+        dom.tabLogin.classList.toggle('active', !reg);
+        dom.tabRegister.classList.toggle('active', reg);
+        dom.authUsername.classList.toggle('hidden', !reg);
+        dom.authPassword2.classList.toggle('hidden', !reg);
+        dom.forgotBtn.classList.toggle('hidden', reg);
+        dom.authSubmitBtn.innerText = reg ? 'CREAR CUENTA' : 'ACCEDER';
+        dom.authPassword.autocomplete = reg ? 'new-password' : 'current-password';
+        dom.authHint.innerText = reg
+            ? 'Crea tu cuenta para jugar y guardar tu puntuación'
+            : 'Inicia sesión para jugar y guardar tu puntuación';
         hideAuthError();
+    }
+
+    async function submitAuth() {
+        hideAuthError();
+        const email = dom.authEmail.value.trim();
+        const password = dom.authPassword.value;
+        if (!email || !password) { showAuthError('Introduce email y contraseña.'); return; }
+
+        dom.authSubmitBtn.disabled = true;
         try {
-            // El popup funciona igual en escritorio y en la mayoría de
-            // móviles/tablets con un navegador real, así que se intenta
-            // siempre primero.
-            await auth.signInWithPopup(provider);
-        } catch (err) {
-            console.error('signInWithPopup falló:', err);
-            const canFallBackToRedirect = !inIframe && [
-                'auth/popup-blocked',
-                'auth/popup-closed-by-user',
-                'auth/cancelled-popup-request',
-                'auth/operation-not-supported-in-this-environment',
-            ].includes(err.code);
-            if (canFallBackToRedirect) {
-                try {
-                    await auth.signInWithRedirect(provider);
-                    return; // la página navegará fuera; seguirá al volver
-                } catch (err2) {
-                    console.error('signInWithRedirect también falló:', err2);
-                    showAuthError(err2);
+            if (authMode === 'register') {
+                if (password !== dom.authPassword2.value) {
+                    showAuthError('Las contraseñas no coinciden.');
+                    return;
+                }
+                const wantedName = dom.authUsername.value.trim();
+                const cred = await auth.createUserWithEmailAndPassword(email, password);
+                if (wantedName) {
+                    try { await cred.user.updateProfile({ displayName: wantedName }); } catch (e) { /* no crítico */ }
                 }
             } else {
-                showAuthError(err);
+                await auth.signInWithEmailAndPassword(email, password);
             }
+            dom.authPassword.value = '';
+            dom.authPassword2.value = '';
+        } catch (err) {
+            console.error('Error de autenticación:', err);
+            showAuthError(err);
         } finally {
-            dom.googleBtn.disabled = false;
+            dom.authSubmitBtn.disabled = false;
+        }
+    }
+
+    async function resetPassword() {
+        hideAuthError();
+        const email = dom.authEmail.value.trim();
+        if (!email) { showAuthError('Escribe tu email y vuelve a pulsar aquí.'); return; }
+        try {
+            await auth.sendPasswordResetEmail(email);
+            showAuthError('Te hemos enviado un email para restablecer la contraseña.', true);
+        } catch (err) {
+            console.error('Error al enviar el email de recuperación:', err);
+            showAuthError(err);
         }
     }
 
     function signOutUser() {
         auth.signOut().catch((err) => console.error('Error al cerrar sesión:', err));
     }
-
-    // Si volvemos de un signInWithRedirect, recogemos aquí el resultado.
-    auth.getRedirectResult().catch((err) => {
-        if (err && err.code && err.code !== 'auth/no-auth-event') {
-            console.error('Error al completar el login por redirect:', err);
-            showAuthError(err);
-        }
-    });
 
     // ---------------------------------------------------------------
     // 7) Reacción a cambios de sesión: actualiza la UI y avisa a game.js
@@ -331,6 +382,8 @@
             dom.profileBlock.classList.add('hidden');
             dom.rankingModal.classList.add('hidden');
             dom.myFriendCodeEl.classList.add('hidden');
+            dom.authPassword.value = '';
+            dom.authPassword2.value = '';
             window.dispatchEvent(new CustomEvent('bj-auth-changed', { detail: { signedIn: false } }));
             return;
         }
@@ -338,7 +391,7 @@
         dom.loginBlock.classList.add('hidden');
         dom.profileBlock.classList.remove('hidden');
         dom.profileAvatar.style.visibility = 'visible';
-        dom.profileAvatar.src = user.photoURL || '';
+        dom.profileAvatar.src = user.photoURL || avatarFor(user.displayName || user.email);
         dom.usernameEditRow.classList.add('hidden');
         dom.usernameRow.classList.remove('hidden');
         dom.myFriendCodeEl.classList.remove('hidden');
@@ -347,6 +400,7 @@
         try {
             const profile = await loadOrCreateProfile(user);
             dom.profileName.innerText = profile.username || user.displayName || 'Jugador';
+            dom.profileAvatar.src = profile.photoURL || avatarFor(profile.username || user.email);
             window.dispatchEvent(new CustomEvent('bj-auth-changed', {
                 detail: {
                     signedIn: true,
@@ -365,7 +419,13 @@
     // ---------------------------------------------------------------
     // 8) Listeners de la interfaz
     // ---------------------------------------------------------------
-    dom.googleBtn.addEventListener('click', signIn);
+    dom.tabLogin.addEventListener('click', () => setAuthMode('login'));
+    dom.tabRegister.addEventListener('click', () => setAuthMode('register'));
+    dom.authSubmitBtn.addEventListener('click', submitAuth);
+    dom.forgotBtn.addEventListener('click', resetPassword);
+    [dom.authUsername, dom.authEmail, dom.authPassword, dom.authPassword2].forEach((el) => {
+        el.addEventListener('keydown', (e) => { if (e.key === 'Enter') submitAuth(); });
+    });
     dom.signoutBtn.addEventListener('click', signOutUser);
 
     dom.rankingFab.addEventListener('click', openRankingModal);
@@ -439,7 +499,7 @@
     // ---------------------------------------------------------------
     window.BJFirebase = {
         isSignedIn: () => !!currentUser,
-        promptSignIn: () => dom.googleBtn.click(),
+        promptSignIn: () => { dom.loginBlock.classList.remove('hidden'); dom.authEmail.focus(); },
         reportScore,
         saveProgress,
     };
