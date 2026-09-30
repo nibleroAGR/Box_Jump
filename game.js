@@ -47,25 +47,100 @@ if (bestValueEl) bestValueEl.innerText = bestScore;
 // Partida guardada (checkpoint cada 5 niveles), recibida al iniciar sesión
 let savedGameData = null;
 
+// ===================== MODOS DE JUEGO =====================
+// 'normal' (infinito) | 'daily' (fase diaria, semilla fija) | 'custom' (fase creada en el editor)
+let gameMode = 'normal';
+let modeCfg = null;      // { type, first, last, total, seed?, levels?, onEnd?, onExit? }
+let runEnded = true;
+let genRng = Math.random; // generador de azar de la generación de niveles
+
+const goTitle = document.getElementById('go-title');
+const goNote = document.getElementById('go-note');
+const goPrimaryBtn = document.getElementById('go-primary-btn');
+const goMenuBtn = document.getElementById('go-menu-btn');
+
+function xmur3(str) {
+    let h = 1779033703 ^ str.length;
+    for (let i = 0; i < str.length; i++) { h = Math.imul(h ^ str.charCodeAt(i), 3432918353); h = (h << 13) | (h >>> 19); }
+    return function () { h = Math.imul(h ^ (h >>> 16), 2246822507); h = Math.imul(h ^ (h >>> 13), 3266489909); return (h ^= h >>> 16) >>> 0; };
+}
+function mulberry32(a) {
+    return function () {
+        a |= 0; a = (a + 0x6D2B79F5) | 0;
+        let t = Math.imul(a ^ (a >>> 15), 1 | a);
+        t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+        return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+    };
+}
+// Cada nivel de la fase diaria tiene su propia semilla: mismo nivel = mismas plataformas para todos
+function seedLevelRng() {
+    genRng = (modeCfg && modeCfg.seed) ? mulberry32(xmur3(modeCfg.seed + ':' + level)()) : Math.random;
+}
+function hudLevel() {
+    if (modeCfg && modeCfg.total > 1) return (level - modeCfg.first + 1) + '/' + modeCfg.total;
+    return String(level);
+}
+function setLevelHUD() { levelValue.innerText = hudLevel(); }
+
+// Posición X de una plataforma/objeto a partir de una fracción 0..1 (misma fórmula que la generación aleatoria)
+function mapX(fx, w, W, side) {
+    const base = side === 'left' ? 50 : 30;
+    return base + Math.max(0, Math.min(1, fx)) * (W - w - 80);
+}
+function customLevelData() {
+    return (modeCfg && modeCfg.levels && modeCfg.levels[level - 1]) || { items: [], wind: 0, lowG: false };
+}
+function levelPlatformCount() {
+    if (gameMode === 'custom') return Math.max(1, customLevelData().items.filter(i => i.k === 'plat').length);
+    return 5 + Math.floor(level / 2);
+}
+function rollEnvironment(allowGravity) {
+    seedLevelRng();
+    if (gameMode === 'custom') {
+        const d = customLevelData();
+        windForce = (d.wind || 0) * 0.028;
+        gravityFactor = d.lowG ? 0.4 : 1.0;
+        return;
+    }
+    windForce = rollWind(genRng);
+    gravityFactor = (allowGravity && level >= 30 && genRng() < 0.3) ? 0.4 : 1.0; // Baja gravedad ocasional en modo Caos
+}
+function buildCustomLevel() {
+    const d = customLevelData();
+    const base = platforms[0], baseY = base.y;
+    const plats = d.items.filter(i => i.k === 'plat').sort((a, b) => a.y - b.y);
+    plats.forEach((it, i) => {
+        const goal = i === plats.length - 1, w = it.w || 90;
+        platforms.push(new Platform(mapX(it.fx, w, width, precisionSystem.side), baseY - it.y, w, 20, goal, goal ? 'normal' : (it.t || 'normal')));
+        totalPlatformGlobalCount++;
+    });
+    d.items.forEach(it => {
+        const cx = mapX(it.fx, 0, width, precisionSystem.side), y = baseY - it.y;
+        if (it.k === 'drone') obstacles.push(new Obstacle({ patrol: true, x: cx - 20, y: y - 10, dir: it.fx < 0.5 ? 1 : -1 }));
+        else if (it.k === 'shield' || it.k === 'dj') powerups.push(new PowerUp(cx - 10, y - 10, it.k === 'shield' ? 'shield' : 'doubleJump'));
+        else if (it.k === 'hole') blackHoles.push(new BlackHole(cx, y, it.w || 35));
+        else if (it.k === 'box') { const sz = it.w || 24; props.push(new Prop(cx - sz / 2, y - sz / 2, sz, sz, 'hsl(215, 80%, 60%)')); }
+    });
+}
+function populateLevel() {
+    if (gameMode === 'custom') { buildCustomLevel(); return; }
+    for (let i = 1; i < platformsInLevel; i++) spawnNextPlatform(i === platformsInLevel - 1);
+}
+
 function updateStartScreenUI() {
     const hasCheckpoint = !!(savedGameData && savedGameData.level > 1);
     if (startBtn) {
-        startBtn.innerText = hasCheckpoint ? `CONTINUAR (Nivel ${savedGameData.level})` : 'EMPEZAR';
+        startBtn.innerText = hasCheckpoint ? `▶ CONTINUAR (Nivel ${savedGameData.level})` : '▶ CONTINUAR (sin partida guardada)';
+        startBtn.disabled = !hasCheckpoint;
     }
-    if (newGameBtn) {
-        newGameBtn.classList.toggle('hidden', !hasCheckpoint);
-    }
-    if (restartBtn) {
-        restartBtn.innerText = hasCheckpoint ? `CONTINUAR (Nivel ${savedGameData.level})` : 'REINTENTAR';
-    }
-    if (gameOverNewBtn) {
-        gameOverNewBtn.classList.toggle('hidden', !hasCheckpoint);
-    }
+    if (newGameBtn) newGameBtn.classList.remove('hidden');
+    if (restartBtn) restartBtn.innerText = hasCheckpoint ? `CONTINUAR (Nivel ${savedGameData.level})` : 'REINTENTAR';
+    if (gameOverNewBtn) gameOverNewBtn.classList.toggle('hidden', !hasCheckpoint);
 }
 
 function updateScoreDisplay() {
     scoreValue.innerText = score;
-    if (score > bestScore) {
+    if (gameMode === 'normal' && score > bestScore) {
         bestScore = score;
         try { localStorage.setItem('boxjump_best_score', String(bestScore)); } catch (e) { /* almacenamiento no disponible */ }
     }
@@ -110,9 +185,9 @@ let windForce = 0;
 let gravityFactor = 1.0;
 
 // Viento (nivel >= 12): dirección aleatoria e intensidad mínima para que siempre se note
-function rollWind() {
+function rollWind(R = Math.random) {
     if (level < 12) return 0;
-    return (Math.random() < 0.5 ? -1 : 1) * (0.025 + Math.random() * 0.055);
+    return (R() < 0.5 ? -1 : 1) * (0.025 + R() * 0.055);
 }
 let hasShield = false;
 let canDoubleJump = false;
@@ -428,15 +503,15 @@ class Prop {
 
 // --- PLATFORMS ---
 class Platform {
-    constructor(x, y, w, h, isGoal = false, type = 'normal') {
+    constructor(x, y, w, h, isGoal = false, type = 'normal', dirX, dirY) {
         this.x = x; this.y = y; this.w = w; this.h = h;
         this.isGoal = isGoal;
         this.type = type; // 'normal', 'vanishing', 'moving', 'ice', 'sticky', 'fragile'
         this.alpha = 1.0;
         this.vanishingStarted = false;
         this.startTime = 0;
-        this.vx = (type === 'moving') ? (Math.random() > 0.5 ? 2 : -2) * (1 + level * 0.1) : 0;
-        this.vy = (type === 'oscillating') ? (Math.random() > 0.5 ? 1.5 : -1.5) * (1 + level * 0.1) : 0;
+        this.vx = (type === 'moving') ? ((dirX === undefined ? Math.random() > 0.5 : dirX) ? 2 : -2) * (1 + level * 0.1) : 0;
+        this.vy = (type === 'oscillating') ? ((dirY === undefined ? Math.random() > 0.5 : dirY) ? 1.5 : -1.5) * (1 + level * 0.1) : 0;
         this.isBroken = false;
         this.isPaused = false;
         this.pauseTimer = 0;
@@ -567,15 +642,28 @@ class Platform {
 }
 
 class Obstacle {
-    constructor() {
+    constructor(o) {
         this.w = 40; this.h = 20;
-        this.x = Math.random() > 0.5 ? -this.w : width;
-        this.y = player.y - 300 - Math.random() * 400;
-        this.vx = (this.x < 0 ? 1 : -1) * (2 + level * 0.2);
         this.color = THEME.obstacle;
+        this.dead = false;
+        if (o && o.patrol) { // dron de patrulla (fases del editor): va y viene sin salir nunca
+            this.patrol = true; this.x = o.x; this.y = o.y; this.vx = o.dir * (2.2 + level * 0.15);
+            return;
+        }
+        const rSide = (o && o.rSide !== undefined) ? o.rSide : Math.random();
+        const rY = (o && o.rY !== undefined) ? o.rY : Math.random();
+        this.x = rSide > 0.5 ? -this.w : width;
+        this.y = player.y - 300 - rY * 400;
+        this.vx = (this.x < 0 ? 1 : -1) * (2 + level * 0.2);
     }
     update() {
+        if (this.dead) return false;
         this.x += this.vx;
+        if (this.patrol) {
+            if (this.x < 0) { this.x = 0; this.vx = Math.abs(this.vx); }
+            else if (this.x + this.w > width) { this.x = width - this.w; this.vx = -Math.abs(this.vx); }
+            return true;
+        }
         return (this.x > -100 && this.x < width + 100);
     }
     draw() {
@@ -622,8 +710,8 @@ class PowerUp {
 }
 
 class BlackHole {
-    constructor(x, y) {
-        this.x = x; this.y = y; this.radius = 30 + Math.random() * 20;
+    constructor(x, y, radius) {
+        this.x = x; this.y = y; this.radius = radius || (30 + Math.random() * 20);
     }
     draw() {
         ctx.save();
@@ -671,15 +759,15 @@ function initPlatforms(startLevel = 1, startScore = 0) {
     originY = null; player.rocket = false;
     level = Math.max(1, startLevel);
     score = Math.max(0, startScore);
-    platformsInLevel = 5 + Math.floor(level / 2);
+    platformsInLevel = levelPlatformCount();
     platformsReached = 0; totalPlatformGlobalCount = 0;
-    combo = 0; windForce = rollWind(); gravityFactor = 1.0;
+    combo = 0; rollEnvironment(false);
     hasShield = false; canDoubleJump = false; doubleJumpUsed = false;
     inventory = []; updateInventoryUI();
     ballSpeedFactor = 1.0; greenPowerActive = 0; platformItemActive = false; bombActive = false;
     if (clockTimeoutId) { clearTimeout(clockTimeoutId); clockTimeoutId = null; }
 
-    levelValue.innerText = level;
+    setLevelHUD();
     updateScoreDisplay();
     updateComboDisplay();
 
@@ -693,79 +781,74 @@ function initPlatforms(startLevel = 1, startScore = 0) {
     player.angularVelocity = 0;
     player.onGround = true;
     player.currentPlatform = platforms[0];
-    for (let i = 1; i < platformsInLevel; i++) {
-        spawnNextPlatform(i === platformsInLevel - 1);
-    }
+    populateLevel();
 }
 
 function spawnNextPlatform(forceGoal = false) {
+    const R = genRng;
     const last = platforms[platforms.length - 1];
-    const marginY = 110 + Math.random() * 90;
+    const marginY = 110 + R() * 90;
     const nextY = last.y - marginY;
-    const nextW = Math.max(50, 80 + Math.random() * 40 - (level * 0.5));
+    const nextW = Math.max(50, 80 + R() * 40 - (level * 0.5));
     // Deja libre el lado donde está la barra de precisión
-    const nextX = (precisionSystem.side === 'left' ? 50 : 30) + Math.random() * (width - nextW - 80);
+    const nextX = (precisionSystem.side === 'left' ? 50 : 30) + R() * (width - nextW - 80);
+    // Tiradas siempre en el mismo orden (se usen o no): con la misma semilla el nivel sale idéntico
+    const rType = R(), rIce = R(), rDirX = R(), rDirY = R(), rObs = R(), rObsSide = R(), rObsY = R(),
+        rPow = R(), rPowType = R(), rBH = R(), rBHx = R(), rBHr = R(), rProp = R(), rPw = R(), rPh = R(), rPx = R(), rHue = R();
 
     totalPlatformGlobalCount++;
 
     // DETERMINAR TIPO DE PLATAFORMA
     let type = 'normal';
     if (!forceGoal) {
-        const rand = Math.random();
         if (level >= 6 && totalPlatformGlobalCount % 10 === 0) type = 'vanishing';
-        else if (level >= 27 && rand < 0.06) type = 'flash';
-        else if (level >= 22 && rand < 0.14) type = 'fragile';
-        else if (level >= 16 && rand < 0.22) type = 'mini_sticky';
-        else if (level >= 12 && rand < 0.32) type = (Math.random() > 0.5 ? 'ice' : 'sticky');
-        else if (level >= 6 && rand < 0.40) type = 'spring';
-        else if (level >= 8 && rand < 0.55) type = 'moving';
+        else if (level >= 27 && rType < 0.06) type = 'flash';
+        else if (level >= 22 && rType < 0.14) type = 'fragile';
+        else if (level >= 16 && rType < 0.22) type = 'mini_sticky';
+        else if (level >= 12 && rType < 0.32) type = (rIce > 0.5 ? 'ice' : 'sticky');
+        else if (level >= 6 && rType < 0.40) type = 'spring';
+        else if (level >= 8 && rType < 0.55) type = 'moving';
     }
 
-    const platform = new Platform(nextX, nextY, nextW, 20, forceGoal, type);
-    platforms.push(platform);
+    platforms.push(new Platform(nextX, nextY, nextW, 20, forceGoal, type, rDirX > 0.5, rDirY > 0.5));
 
     // Obstáculos (Nivel 15+)
-    if (level >= 15 && Math.random() < 0.3) {
-        obstacles.push(new Obstacle());
-    }
+    if (level >= 15 && rObs < 0.3) obstacles.push(new Obstacle({ rSide: rObsSide, rY: rObsY }));
 
     // Power-ups (Nivel 18+)
-    if (level >= 18 && Math.random() < 0.15 && !hasShield && !canDoubleJump) {
-        powerups.push(new PowerUp(nextX + nextW / 2 - 10, nextY - 50, Math.random() > 0.5 ? 'shield' : 'doubleJump'));
+    if (level >= 18 && rPow < 0.15 && !hasShield && !canDoubleJump) {
+        powerups.push(new PowerUp(nextX + nextW / 2 - 10, nextY - 50, rPowType > 0.5 ? 'shield' : 'doubleJump'));
     }
 
     // Agujeros Negros (Nivel 25+)
-    if (level >= 25 && Math.random() < 0.1) {
-        blackHoles.push(new BlackHole(Math.random() * width, nextY - 100));
-    }
+    if (level >= 25 && rBH < 0.1) blackHoles.push(new BlackHole(rBHx * width, nextY - 100, 30 + rBHr * 20));
 
     // Props (Cajas)
-    if (!forceGoal && Math.random() < 0.3) {
-        const propW = 15 + Math.random() * 20;
-        const propH = 15 + Math.random() * 20;
-        const propX = nextX + Math.random() * (nextW - propW);
-        const propCol = `hsl(${200 + Math.random() * 30}, 80%, 60%)`;
-        props.push(new Prop(propX, nextY - propH, propW, propH, propCol));
+    if (!forceGoal && rProp < 0.3) {
+        const propW = 15 + rPw * 20;
+        const propH = 15 + rPh * 20;
+        const propX = nextX + rPx * (nextW - propW);
+        props.push(new Prop(propX, nextY - propH, propW, propH, `hsl(${200 + rHue * 30}, 80%, 60%)`));
     }
 }
 
 function nextLevel() {
+    // Fin de la fase (diaria / creada): último nivel superado
+    if (modeCfg && level >= modeCfg.last) { finishRun(true); return; }
+
     level++;
-    levelValue.innerText = level;
+    setLevelHUD();
 
-    // Configuración ambiental según nivel
-    windForce = rollWind();
-    gravityFactor = (level >= 30 && Math.random() < 0.3) ? 0.4 : 1.0; // Baja gravedad ocasional en modo Caos
+    // Configuración ambiental según nivel (viento / gravedad; en fases creadas viene del editor)
+    rollEnvironment(true);
 
-    platformsInLevel = 5 + Math.floor(level / 2);
+    platformsInLevel = levelPlatformCount();
     platformsReached = 0;
-    showFeedback("¡NIVEL " + level + "!" + (windForce !== 0 ? "\n¡CUIDADO CON EL VIENTO!" : "") + (gravityFactor < 1 ? "\n¡GRAVEDAD BAJA!" : ""));
+    showFeedback("¡NIVEL " + hudLevel() + "!" + (windForce !== 0 ? "\n¡CUIDADO CON EL VIENTO!" : "") + (gravityFactor < 1 ? "\n¡GRAVEDAD BAJA!" : ""));
 
-    // Guardado automático cada 5 niveles (checkpoint)
-    if (level % 5 === 0 && window.BJFirebase && window.BJFirebase.isSignedIn()) {
+    // Guardado automático cada 5 niveles (checkpoint) — solo en la partida normal
+    if (gameMode === 'normal' && level % 5 === 0 && window.BJFirebase && window.BJFirebase.isSignedIn()) {
         window.BJFirebase.saveProgress(score, level);
-        // Actualizamos el estado local al instante: no hace falta esperar a
-        // un nuevo evento de login para poder "continuar" desde aquí.
         savedGameData = { score, level };
         updateStartScreenUI();
     }
@@ -775,12 +858,10 @@ function nextLevel() {
     props = [];
     obstacles = [];
     powerups = [];
-    // Mantener agujeros negros si están cerca
-    blackHoles = blackHoles.filter(bh => Math.abs(bh.y - player.y) < height);
+    // Mantener agujeros negros si están cerca (en fases creadas cada nivel trae los suyos)
+    blackHoles = gameMode === 'custom' ? [] : blackHoles.filter(bh => Math.abs(bh.y - player.y) < height);
 
-    for (let i = 1; i < platformsInLevel; i++) {
-        spawnNextPlatform(i === platformsInLevel - 1);
-    }
+    populateLevel();
 }
 
 // --- UTILS ---
@@ -1054,7 +1135,7 @@ function checkCollisions() {
             if (hasShield || shieldConsumedThisFrame) {
                 if (hasShield) useShield();
                 shieldConsumedThisFrame = true;
-                obs.x = -1000; // Eliminar obstáculo
+                obs.x = -1000; obs.dead = true; // Eliminar obstáculo
             } else {
                 endGame();
             }
@@ -1287,31 +1368,80 @@ function draw() {
 }
 
 function gameLoop() { update(); draw(); requestAnimationFrame(gameLoop); }
-function startGame(continueGame = false) {
+function startGame(continueGame = false, cfg = null) {
     // Hay que iniciar sesión con Google antes de poder jugar
     if (window.BJFirebase && !window.BJFirebase.isSignedIn()) {
         window.BJFirebase.promptSignIn();
         return;
     }
+    modeCfg = cfg || null;
+    gameMode = cfg ? cfg.type : 'normal';
+    runEnded = false;
     gameActive = true;
     startScreen.classList.add('hidden');
     gameOverScreen.classList.add('hidden');
     if (rankingFab) rankingFab.classList.remove('hidden');
 
-    const resume = continueGame && savedGameData && savedGameData.level > 1;
-    initPlatforms(resume ? savedGameData.level : 1, resume ? (savedGameData.score || 0) : 0);
-    levelValue.innerText = level;
+    const resume = !cfg && continueGame && savedGameData && savedGameData.level > 1;
+    initPlatforms(cfg ? cfg.first : (resume ? savedGameData.level : 1), resume ? (savedGameData.score || 0) : 0);
+    setLevelHUD();
     updateScoreDisplay();
     precisionSystem.spawnBall();
 }
-function endGame() {
+function endGame() { finishRun(false); }
+
+// Fin de partida (derrota o fase completada). En los modos especiales, el modo decide
+// qué se guarda y qué botones aparecen (modeCfg.onEnd).
+function finishRun(completed) {
+    if (runEnded) return;
+    runEnded = true;
     gameActive = false;
+    aim.cancel();
+    const cleared = modeCfg ? (completed ? modeCfg.last - modeCfg.first + 1 : level - modeCfg.first) : level - 1;
     finalScore.innerText = score;
-    finalLevel.innerText = level;
-    gameOverScreen.classList.remove('hidden');
+    finalLevel.innerText = hudLevel();
     if (rankingFab) rankingFab.classList.add('hidden');
     updateStartScreenUI();
-    if (window.BJFirebase) window.BJFirebase.reportScore(score, level);
+
+    let info = {};
+    if (modeCfg && modeCfg.onEnd) {
+        try { info = modeCfg.onEnd({ completed, score, level, cleared }) || {}; } catch (e) { console.error(e); }
+    } else if (gameMode === 'normal' && window.BJFirebase) {
+        window.BJFirebase.reportScore(score, level);
+    }
+
+    goTitle.innerText = info.title || (completed ? '¡FASE COMPLETADA!' : 'FIN DEL JUEGO');
+    goNote.innerText = info.note || '';
+    goNote.classList.toggle('hidden', !info.note);
+    if (modeCfg) {
+        restartBtn.innerText = info.retryText || 'REINTENTAR';
+        gameOverNewBtn.classList.add('hidden');
+    }
+    goPrimaryBtn.classList.toggle('hidden', !info.primary);
+    if (info.primary) {
+        goPrimaryBtn.innerText = info.primary.text;
+        goPrimaryBtn.onclick = () => { gameOverScreen.classList.add('hidden'); info.primary.onClick(); };
+    }
+    gameOverScreen.classList.remove('hidden');
+}
+
+// Vuelve al menú principal (abandona la partida en curso)
+function goToMenu() {
+    if (!runEnded && gameMode === 'normal' && window.BJFirebase) window.BJFirebase.reportScore(score, level);
+    runEnded = true; gameActive = false; bombActive = false;
+    aim.cancel();
+    modeCfg = null; gameMode = 'normal';
+    [gameOverScreen, shopModal, document.getElementById('settings-modal'), document.getElementById('ranking-modal')]
+        .forEach(el => el && el.classList.add('hidden'));
+    if (rankingFab) rankingFab.classList.add('hidden');
+    startScreen.classList.remove('hidden');
+    updateStartScreenUI();
+}
+// Salir de una partida: cada modo puede indicar a dónde volver (onExit)
+function exitRun() {
+    const cb = modeCfg && modeCfg.onExit;
+    goToMenu();
+    if (cb) cb();
 }
 
 // Puente con el módulo de Firebase (index.html) para pausar el juego
@@ -1345,7 +1475,8 @@ window.addEventListener('resize', resize);
 resize();
 startBtn.addEventListener('click', () => startGame(true));
 if (newGameBtn) newGameBtn.addEventListener('click', () => startGame(false));
-restartBtn.addEventListener('click', () => startGame(true));
+restartBtn.addEventListener('click', () => (modeCfg ? startGame(false, modeCfg) : startGame(true)));
+if (goMenuBtn) goMenuBtn.addEventListener('click', goToMenu);
 if (gameOverNewBtn) gameOverNewBtn.addEventListener('click', () => startGame(false));
 
 const triggerAction = (e) => {
@@ -1397,7 +1528,7 @@ const triggerAction = (e) => {
 // disparar el salto (y sobre todo no se les debe hacer preventDefault, o no
 // funcionan ni los clics ni el teclado en móvil).
 const isUiTarget = (e) => !!(e.target && e.target.closest &&
-    e.target.closest('button, input, textarea, a, .screen, #hud-menu, #shop-fab, #ranking-fab, #settings-fab, #shop-modal, #ranking-modal, .inv-slot'));
+    e.target.closest('button, input, textarea, a, .screen, #hud-menu, #shop-fab, #ranking-fab, #settings-fab, #home-fab, #shop-modal, #ranking-modal, .inv-slot'));
 window.addEventListener('mousedown', (e) => {
     if (isUiTarget(e)) return;
     triggerAction(e);
@@ -1482,7 +1613,11 @@ function setMenuOpen(open) {
     menuToggle.setAttribute('aria-expanded', String(open));
 }
 if (menuToggle) menuToggle.addEventListener('click', () => setMenuOpen(menuPanel.classList.contains('hidden')));
-[shopFab, rankingFab].forEach((el) => { if (el) el.addEventListener('click', () => setMenuOpen(false)); });
+const homeFab = document.getElementById('home-fab');
+[shopFab, rankingFab, homeFab].forEach((el) => { if (el) el.addEventListener('click', () => setMenuOpen(false)); });
+if (homeFab) homeFab.addEventListener('click', () => {
+    if (runEnded || confirm('¿Salir de la partida? Se perderá el progreso de esta carrera (excepto el último punto de control).')) exitRun();
+});
 
 // --- Configuración (código de amigo + lado de la barra de precisión) ---
 const settingsFab = document.getElementById('settings-fab');
@@ -1534,5 +1669,14 @@ window.addEventListener('keydown', (e) => {
     if (e.key === '2') game.useItem(1);
     if (e.key === '3') game.useItem(2);
 });
+
+// API pública para modes.js (fase diaria y creador)
+window.BJGame = {
+    start: (cfg) => startGame(false, cfg),
+    exit: exitRun,
+    toMenu: goToMenu,
+    mapX,
+    getSide: () => precisionSystem.side,
+};
 
 gameLoop();

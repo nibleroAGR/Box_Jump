@@ -6,7 +6,7 @@
     <meta name="viewport"
         content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
     <title>Box Jump Precision</title>
-    <link rel="stylesheet" href="style.css?v=14">
+    <link rel="stylesheet" href="style.css?v=15">
 </head>
 
 <body>
@@ -27,6 +27,7 @@
                             <div id="shop-fab" title="Tienda">🛒</div>
                             <div id="ranking-fab" class="hidden" title="Clasificación">🏆</div>
                             <div id="settings-fab" title="Configuración">⚙️</div>
+                            <div id="home-fab" title="Menú principal">🏠</div>
                         </div>
                     </div>
                 </div>
@@ -163,33 +164,101 @@
                             <input id="username-input" type="text" maxlength="20" placeholder="Nombre de usuario" />
                             <button id="save-username-btn">✔</button>
                         </div>
-                        <button id="start-btn">EMPEZAR</button>
-                        <button id="new-game-btn" class="secondary-btn hidden">NUEVA PARTIDA</button>
+                        <div id="menu-buttons">
+                            <button id="new-game-btn" class="menu-btn">1 · 🎮 NUEVA PARTIDA</button>
+                            <button id="start-btn" class="menu-btn">2 · ▶ CONTINUAR</button>
+                            <button id="daily-btn" class="menu-btn">3 · 📅 FASE DIARIA</button>
+                            <button id="creator-btn" class="menu-btn">4 · 🛠 CREADOR</button>
+                        </div>
                         <button id="signout-btn" class="secondary-btn ghost-btn">Cerrar sesión</button>
                     </div>
                 </div>
             </div>
             <div id="game-over-screen" class="screen hidden">
                 <div class="glass-card">
-                    <h2>FIN DEL JUEGO</h2>
+                    <h2 id="go-title">FIN DEL JUEGO</h2>
+                    <p id="go-note" class="go-note hidden"></p>
                     <div class="stats-final">
                         <p>PUNTUACIÓN: <span id="final-score">0</span></p>
                         <p>NIVEL ALCANZADO: <span id="final-level">1</span></p>
                     </div>
                     <button id="restart-btn">REINTENTAR</button>
+                    <button id="go-primary-btn" class="hidden">ACEPTAR</button>
                     <button id="game-over-new-btn" class="secondary-btn hidden">EMPEZAR DE NUEVO</button>
+                    <button id="go-menu-btn" class="secondary-btn ghost-btn">Menú principal</button>
+                </div>
+            </div>
+
+            <!-- ================= FASE DIARIA ================= -->
+            <div id="daily-screen" class="screen hidden">
+                <div class="glass-card wide-card">
+                    <h2>📅 FASE DIARIA</h2>
+                    <p class="settings-help">La misma fase para todos los jugadores: 10 niveles. Cambia a medianoche (hora de Madrid). Intentos ilimitados; cuenta tu mejor puntuación.</p>
+                    <p class="daily-date">Hoy: <strong id="daily-date">-</strong></p>
+                    <p id="daily-mine" class="daily-mine">Cargando...</p>
+                    <div id="daily-list" class="ranking-list"></div>
+                    <button id="daily-play-btn">▶ JUGAR</button>
+                    <button id="daily-close-btn" class="secondary-btn ghost-btn">Volver</button>
+                </div>
+            </div>
+
+            <!-- ================= CREADOR (hub) ================= -->
+            <div id="creator-screen" class="screen hidden">
+                <div class="glass-card wide-card">
+                    <h2>🛠 CREADOR</h2>
+                    <div class="ranking-tabs">
+                        <button id="cr-tab-mine" class="rank-tab active">MIS FASES</button>
+                        <button id="cr-tab-community" class="rank-tab">COMUNIDAD</button>
+                    </div>
+                    <div id="cr-search-row" class="settings-row hidden">
+                        <input id="cr-search" class="settings-input" type="text" maxlength="30" placeholder="Buscar por nombre o autor" autocomplete="off" />
+                        <button id="cr-search-btn" type="button" class="cr-mini">🔍</button>
+                    </div>
+                    <button id="cr-new-btn" class="cr-new">➕ NUEVA FASE (10 niveles)</button>
+                    <div id="cr-list" class="cr-list"></div>
+                    <button id="cr-close-btn" class="secondary-btn ghost-btn">Volver</button>
+                </div>
+            </div>
+
+            <!-- ================= EDITOR ================= -->
+            <div id="editor-screen" class="screen hidden">
+                <div id="ed-root">
+                    <div id="ed-top">
+                        <button id="ed-back" type="button" title="Guardar y salir">◀</button>
+                        <input id="ed-name" type="text" maxlength="30" placeholder="Nombre de la fase" autocomplete="off" />
+                        <button id="ed-save" type="button" title="Guardar">💾</button>
+                    </div>
+                    <div id="ed-levels"></div>
+                    <div id="ed-canvas-wrap"><canvas id="ed-canvas"></canvas></div>
+                    <div id="ed-palette"></div>
+                    <div id="ed-sel" class="hidden"></div>
+                    <div id="ed-env">
+                        <span>Viento</span>
+                        <button id="ed-wind-minus" type="button">−</button>
+                        <span id="ed-wind-val">0</span>
+                        <button id="ed-wind-plus" type="button">+</button>
+                        <button id="ed-lowg" type="button">🪶 Gravedad baja</button>
+                        <button id="ed-clear" type="button">Vaciar nivel</button>
+                    </div>
+                    <div id="ed-status"></div>
+                    <div id="ed-actions">
+                        <button id="ed-test" type="button">▶ PROBAR NIVEL</button>
+                        <button id="ed-verify" type="button">✔ VERIFICAR</button>
+                        <button id="ed-publish" type="button">🌐 PUBLICAR</button>
+                    </div>
                 </div>
             </div>
         </div>
 
-        <script src="game.js?v=15"></script>
+        <script src="game.js?v=16"></script>
 
         <!-- SDK "compat" de Firebase: archivos únicos clásicos, sin import/export
              encadenados, para máxima compatibilidad entre navegadores/dispositivos. -->
         <script src="https://www.gstatic.com/firebasejs/10.13.2/firebase-app-compat.js"></script>
         <script src="https://www.gstatic.com/firebasejs/10.13.2/firebase-auth-compat.js"></script>
         <script src="https://www.gstatic.com/firebasejs/10.13.2/firebase-firestore-compat.js"></script>
-        <script src="backend.js?v=6"></script>
+        <script src="backend.js?v=7"></script>
+        <script src="modes.js?v=1"></script>
     </div>
 </body>
 

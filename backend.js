@@ -603,6 +603,108 @@
     });
 
     // ---------------------------------------------------------------
+    // 8b) Modos: Fase diaria y Creador de fases
+    //   daily/{YYYY-MM-DD}/scores/{uid}     -> mejor resultado del día de cada jugador
+    //   users/{uid}/drafts/{id}             -> borradores privados del editor
+    //   levels/{id}                         -> fases publicadas (visibles para todos)
+    // ---------------------------------------------------------------
+    const dailyCol = (key) => db.collection('daily').doc(key).collection('scores');
+    const levelsCol = () => db.collection('levels');
+    const draftsCol = () => users().doc(currentUser.uid).collection('drafts');
+    const ts = () => firebase.firestore.FieldValue.serverTimestamp();
+    const clone = (o) => JSON.parse(JSON.stringify(o));
+
+    async function myIdentity() {
+        const snap = await users().doc(currentUser.uid).get();
+        const d = snap.exists ? snap.data() : {};
+        return {
+            username: d.username || currentUser.displayName || 'Jugador',
+            photoURL: d.photoURL || currentUser.photoURL || '',
+        };
+    }
+
+    // Fase diaria: solo se guarda si mejora el resultado previo del mismo día
+    async function reportDaily(key, res) {
+        if (!currentUser) return;
+        const ref = dailyCol(key).doc(currentUser.uid);
+        const snap = await ref.get();
+        const old = snap.exists ? snap.data() : null;
+        if (old && (old.score > res.score || (old.score === res.score && (old.cleared || 0) >= res.cleared))) return;
+        const who = await myIdentity();
+        await ref.set({
+            uid: currentUser.uid, username: who.username, photoURL: who.photoURL,
+            score: res.score, cleared: res.cleared, completed: !!res.completed, updatedAt: ts(),
+        });
+    }
+    async function getDailyTop(key, n) {
+        const snap = await dailyCol(key).orderBy('score', 'desc').limit(n || 20).get();
+        return snap.docs.map((d) => ({ uid: d.id, ...d.data() }));
+    }
+    async function getMyDaily(key) {
+        if (!currentUser) return null;
+        const snap = await dailyCol(key).doc(currentUser.uid).get();
+        return snap.exists ? { uid: snap.id, ...snap.data() } : null;
+    }
+
+    // Borradores
+    async function listDrafts() {
+        if (!currentUser) return [];
+        const snap = await draftsCol().orderBy('updatedAt', 'desc').get();
+        return snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+    }
+    async function saveDraft(d) {
+        if (!currentUser) throw new Error('Sin sesión');
+        const data = clone({ name: d.name || 'Mi fase', levels: d.levels, verifiedSig: d.verifiedSig || null, publishedId: d.publishedId || null });
+        data.updatedAt = ts();
+        if (d.id) { await draftsCol().doc(d.id).set(data, { merge: true }); return d.id; }
+        const ref = await draftsCol().add(data);
+        return ref.id;
+    }
+    async function deleteDraft(id) { await draftsCol().doc(id).delete(); }
+
+    // Publicación (el cliente solo llama aquí tras verificar la fase)
+    async function publishLevel(d) {
+        if (!currentUser) throw new Error('Sin sesión');
+        const who = await myIdentity();
+        const name = (d.name || '').trim();
+        const base = {
+            name, nameLower: name.toLowerCase(),
+            authorUid: currentUser.uid, authorName: who.username, authorLower: who.username.toLowerCase(),
+            levels: clone(d.levels), updatedAt: ts(),
+        };
+        if (d.publishedId) {
+            try {
+                const ref = levelsCol().doc(d.publishedId);
+                const s = await ref.get();
+                if (s.exists && s.data().authorUid === currentUser.uid) { await ref.update(base); return d.publishedId; }
+            } catch (err) { console.warn('No se pudo actualizar la fase publicada, se crea una nueva', err); }
+        }
+        const ref = await levelsCol().add({ ...base, plays: 0, completions: 0, createdAt: ts() });
+        return ref.id;
+    }
+    async function unpublishLevel(id) { await levelsCol().doc(id).delete(); }
+
+    // Búsqueda: sin texto = las más recientes. Con texto = coincidencia por nombre o autor.
+    async function searchLevels(q) {
+        const ql = (q || '').trim().toLowerCase();
+        const out = new Map();
+        const add = (snap) => snap.docs.forEach((d) => out.set(d.id, { id: d.id, ...d.data() }));
+        const recent = await levelsCol().orderBy('createdAt', 'desc').limit(ql ? 150 : 30).get();
+        if (!ql) { add(recent); return [...out.values()]; }
+        recent.docs.forEach((d) => {
+            const v = d.data();
+            if ((v.nameLower || '').includes(ql) || (v.authorLower || '').includes(ql)) out.set(d.id, { id: d.id, ...v });
+        });
+        try { add(await levelsCol().orderBy('nameLower').startAt(ql).endAt(ql + '\uf8ff').limit(30).get()); } catch (e) { /* no crítico */ }
+        try { add(await levelsCol().orderBy('authorLower').startAt(ql).endAt(ql + '\uf8ff').limit(30).get()); } catch (e) { /* no crítico */ }
+        return [...out.values()];
+    }
+    async function bumpLevelStat(id, field) {
+        try { await levelsCol().doc(id).update({ [field]: firebase.firestore.FieldValue.increment(1) }); }
+        catch (err) { console.warn('No se pudo actualizar el contador', err); }
+    }
+
+    // ---------------------------------------------------------------
     // 9) API pública para game.js
     // ---------------------------------------------------------------
     window.BJFirebase = {
@@ -610,5 +712,9 @@
         promptSignIn: () => dom.googleBtn.click(),
         reportScore,
         saveProgress,
+        uid: () => (currentUser ? currentUser.uid : null),
+        reportDaily, getDailyTop, getMyDaily,
+        listDrafts, saveDraft, deleteDraft,
+        publishLevel, unpublishLevel, searchLevels, bumpLevelStat,
     };
 })();
