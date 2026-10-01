@@ -235,7 +235,7 @@ const BOX_TYPES = {
     rubber: { name: 'Goma',     wind: 1,   grav: 1,   desc: 'Rebota al caer y en las paredes. Toca la caja (1 vez por nivel) y bota como un resorte.' },
     sticky: { name: 'Pegajosa', wind: 1,   grav: 1,   desc: 'Se pega a la plataforma donde aterriza, sea cual sea la inercia o el tipo de plataforma.' },
     bomb:   { name: 'Bomba',    wind: 1,   grav: 1,   desc: 'Tienes 20 s por nivel para llegar a la meta. Si la desactivas, sale disparada como un cohete, explota y aparece otra caja.' },
-    gravity: { name: 'Gravedad', wind: 1,   grav: 1,   desc: 'Gravedad invertida: se agarra a la parte INFERIOR de las plataformas. Si sube hasta el techo, cae sobre la plataforma más cercana.' },
+    psychedelic: { name: 'Psicodélica', wind: 1, grav: 1, desc: 'Zona verde al 33 % de la barra, pero la bola desaparece de la mitad de la pantalla hacia abajo. Si aciertas el verde (aunque no la veas) saltas directo a la 3.ª plataforma por encima (sin contar las móviles) o, si no hay tantas, a la del siguiente nivel.' },
     mystery: { name: 'Misteriosa', wind: 1, grav: 1,  desc: 'Se comporta como otra caja al azar... pero no te dice cuál.' },
 };
 const BOMB_FUSE_SECONDS = 20;
@@ -244,7 +244,8 @@ try { const sb = localStorage.getItem('boxjump_box_type'); if (sb && BOX_TYPES[s
 let boxType = chosenBox;    // la caja activa ahora mismo (cambia sola cada 3 niveles)
 let mysteryAs = 'normal';   // comportamiento real de la caja misteriosa
 const BOX_SWAP_EVERY = 3;   // niveles que dura cada caja al azar
-const GRAV_MAX_V = 26;      // velocidad máxima de la caja de gravedad
+const PSY_GREEN = 0.33;     // caja psicodélica: la zona verde ocupa el 33 % de la barra de precisión
+const PSY_JUMP_PLATFORMS = 3; // caja psicodélica: con el verde salta a la 3.ª plataforma por encima
 let runFirstLevel = 1;      // primer nivel de la partida en curso
 let rubberBoostUsed = false; // bote de la caja de goma (1 por nivel)
 let bombRocket = false;     // la bomba desactivada vuela como un cohete
@@ -256,7 +257,7 @@ const effWind = () => windForce * boxCfg().wind;          // viento que de verda
 const effGrav = () => player.gravity * boxCfg().grav;     // gravedad propia de esta caja
 const armBomb = () => { bombFuse = BOMB_FUSE_SECONDS; };
 
-// ===================== CAMBIO DE CAJA, GRAVEDAD, COHETE-BOMBA, BOTE DE GOMA =====================
+// ===================== CAMBIO DE CAJA, COHETE-BOMBA, BOTE DE GOMA =====================
 const BOX_KEYS = Object.keys(BOX_TYPES);
 const boxLabel = (k) => (k === 'mystery' ? '❓ Misteriosa' : BOX_TYPES[k].name);
 function rollRandomBox(exclude) {
@@ -272,92 +273,23 @@ function setActiveBox(key) {
     if (key === 'mystery') pickMysteryBehavior();
     placeOnPlatform();
 }
-// Coloca la caja sobre la plataforma (o colgada debajo si es de gravedad)
+// Coloca la caja sobre la plataforma en la que está
 function placeOnPlatform() {
     const p = player.currentPlatform;
-    if (!p || !player.onGround) { player.gravSide = boxKind() === 'gravity' ? 'under' : 'over'; return; }
-    if (boxKind() === 'gravity') { player.gravSide = 'under'; player.y = p.y + p.h; }
-    else { player.gravSide = 'over'; player.y = p.y - player.h; }
+    if (!p || !player.onGround) return;
+    player.y = p.y - player.h;
     player.vy = 0;
 }
 
-// --- Caja de gravedad ---
-function computeGravityJump(tier) {
-    const cur = player.currentPlatform;
-    const cands = platforms
-        .filter((p) => p !== cur && !(p.type === 'flash' && !p.isVisible) && p.y + p.h < player.y - 2)
-        .sort((a, b) => b.y - a.y);
+// --- Caja psicodélica: con el verde salta a la 3.ª plataforma por encima (sin contar las móviles) ---
+// Si no hay tantas, va a la plataforma del siguiente nivel (la meta).
+function psychedelicTarget() {
+    const ok = (p) => p.y < player.y && !p.isBroken && p.type !== 'moving' && p.type !== 'oscillating' &&
+        !(p.type === 'flash' && !p.isVisible);
+    const cands = platforms.filter(ok).sort((a, b) => b.y - a.y); // de la más cercana a la más alta
     if (!cands.length) return null;
-    const target = cands[0];
-    const g = effGrav();
-    const d = player.y - (target.y + target.h);          // recorrido hasta la cara inferior
-    const mult = (tier === 'PERFECT') ? 1.08 : (tier === 'GOOD' ? 1.45 : (Math.random() > 0.5 ? 2.0 : 0.4));
-    const v = Math.max(1.5, Math.sqrt(g * d) * mult);
-    const totalT = (-v + Math.sqrt(v * v + 2 * g * d)) / g; // la gravedad también tira hacia arriba
-    const dx = (target.x + target.w / 2) - (player.x + player.w / 2);
-    return { vy: -v, vxBase: dx / totalT, totalT, target, tier };
-}
-function gravityLand(p, side) {
-    player.gravSide = side;
-    player.y = side === 'under' ? p.y + p.h : p.y - player.h;
-    player.vy = 0; player.angularVelocity = 0; player.rotation = 0;
-    player.onGround = true;
-    if (player.currentPlatform === p) return;
-    if (p.type === 'moving') player.vx = 0;
-    player.currentPlatform = p;
-    lastPlatIdx = p.idx;
-    platformsReached++;
-    doubleJumpUsed = false;
-    createExplosion(player.x + player.w / 2, side === 'under' ? p.y + p.h : p.y, 0.4);
-    chests.forEach((c) => { if (c.p === p && !c.opened) openChest(c); });
-    if ((p.type === 'vanishing' || p.type === 'fragile') && !p.vanishingStarted) {
-        p.vanishingStarted = true; p.startTime = Date.now();
-    }
-    if (p.isGoal) nextLevel();
-}
-function gravityCollisions(wasOnGround) {
-    const cur = player.currentPlatform;
-    // Agarrada: se queda donde está mientras exista su plataforma
-    if (wasOnGround && cur && platforms.includes(cur)) {
-        player.onGround = true; player.vy = 0;
-        player.y = player.gravSide === 'over' ? cur.y - player.h : cur.y + cur.h;
-        return;
-    }
-    // Sube y choca con la cara inferior de una plataforma: se queda colgada
-    if (player.vy <= 0) {
-        for (const p of platforms) {
-            if (p === cur) continue;
-            if (p.type === 'flash' && !p.isVisible) continue;
-            if (player.x + player.w > p.x && player.x < p.x + p.w && player.y <= p.y + p.h && player.y >= p.y - 12) {
-                gravityLand(p, 'under');
-                return;
-            }
-        }
-    }
-}
-// Si "cae" hacia arriba y toca la parte alta de la pantalla, aterriza sobre la plataforma más cercana
-function gravityTopCheck() {
-    if (boxKind() !== 'gravity' || player.onGround || player.vy >= 0 || runEnded) return;
-    if (player.y > height * PLAYER_MIN_Y + 3) return;
-    const visible = (p) => !p.isBroken && !(p.type === 'flash' && !p.isVisible);
-    // si hay una plataforma justo encima, que se encargue la colisión
-    const aboutToHit = platforms.some((p) => visible(p) && p !== player.currentPlatform &&
-        player.x + player.w > p.x && player.x < p.x + p.w && p.y + p.h >= player.y - 30 && p.y + p.h <= player.y + 4);
-    if (aboutToHit) return;
-    const pcx = player.x + player.w / 2;
-    let best = null, bd = Infinity;
-    platforms.forEach((p) => {
-        if (!visible(p)) return;
-        const cx = Math.max(p.x, Math.min(pcx, p.x + p.w));
-        const d = Math.hypot(cx - pcx, p.y - player.y);
-        if (d < bd) { bd = d; best = p; }
-    });
-    if (!best) return;
-    player.x = Math.max(best.x, Math.min(player.x, best.x + best.w - player.w));
-    player.vx = 0;
-    createExplosion(player.x + player.w / 2, player.y, 0.8);
-    showFeedback('🟣 ¡TECHO!\nCaes sobre la plataforma más cercana');
-    gravityLand(best, 'over');
+    if (cands.length >= PSY_JUMP_PLATFORMS) return cands[PSY_JUMP_PLATFORMS - 1];
+    return platforms.find((p) => p.isGoal) || cands[cands.length - 1];
 }
 
 // --- Caja bomba: al desactivarla sale disparada como un cohete, explota y aparece otra caja ---
@@ -465,20 +397,28 @@ function drawBoxShape(c, type, w, h, t, o = {}) {
             }
             break;
         }
-        case 'gravity': { // violeta con chevrons hacia arriba
-            c.shadowBlur = 14; c.shadowColor = '#a78bfa';
-            const g = c.createLinearGradient(0, y, 0, y + h);
-            g.addColorStop(0, '#7c3aed'); g.addColorStop(1, '#312e81');
+        case 'psychedelic': { // colores que giran sin parar y una espiral hipnótica
+            const hue = (t * 0.12) % 360;
+            c.shadowBlur = 16; c.shadowColor = `hsl(${hue},100%,60%)`;
+            const g = c.createLinearGradient(x, y, x + w, y + h);
+            g.addColorStop(0, `hsl(${hue},100%,58%)`);
+            g.addColorStop(0.5, `hsl(${(hue + 120) % 360},100%,58%)`);
+            g.addColorStop(1, `hsl(${(hue + 240) % 360},100%,58%)`);
             c.fillStyle = g; c.fillRect(x, y, w, h);
             c.shadowBlur = 0;
-            c.strokeStyle = '#c4b5fd'; c.lineWidth = 2; c.strokeRect(x + 2, y + 2, w - 4, h - 4);
-            const a = 0.55 + 0.45 * Math.sin(t * 0.006);
-            c.strokeStyle = '#ede9fe'; c.lineWidth = 2; c.lineCap = 'round'; c.lineJoin = 'round';
-            [[0.66, a], [0.36, 1.2 - a]].forEach(([ky, al]) => {
-                c.globalAlpha = Math.max(0.2, Math.min(1, al));
-                c.beginPath(); c.moveTo(-w * 0.22, y + h * ky + 4); c.lineTo(0, y + h * ky - 4); c.lineTo(w * 0.22, y + h * ky + 4); c.stroke();
-            });
-            c.globalAlpha = 1;
+            c.save();
+            c.beginPath(); c.rect(x + 2, y + 2, w - 4, h - 4); c.clip();
+            c.strokeStyle = 'rgba(255,255,255,0.85)'; c.lineWidth = Math.max(1.5, w * 0.06); c.lineCap = 'round';
+            c.beginPath();
+            const turns = 3.2 * Math.PI * 2, rot = t * 0.004, maxR = Math.max(w, h) * 0.7;
+            for (let a = 0; a <= turns; a += 0.25) {
+                const r = (a / turns) * maxR;
+                const px = Math.cos(a + rot) * r, py = Math.sin(a + rot) * r;
+                if (a === 0) c.moveTo(px, py); else c.lineTo(px, py);
+            }
+            c.stroke();
+            c.restore();
+            c.strokeStyle = `hsl(${(hue + 180) % 360},100%,85%)`; c.lineWidth = 2; c.strokeRect(x + 1, y + 1, w - 2, h - 2);
             break;
         }
         case 'mystery': { // oscura con borde arcoíris y un "?"
@@ -563,15 +503,13 @@ const player = {
     currentPlatform: null,
     bouncesLeft: 2,   // rebotes que le quedan a la caja de goma
     squash: 0,        // aplastamiento visual (goma)
-    gravSide: 'over', // 'over' = encima de la plataforma; 'under' = colgada debajo (caja de gravedad)
 
     update() {
         if (this.squash > 0) this.squash = Math.max(0, this.squash - 0.07);
         // Viento si no está en el suelo (la caja pesada lo ignora, la ligera lo nota más)
         if (!this.onGround) {
             if (!this.straightBounce) this.vx += effWind();
-            if (boxKind() === 'gravity') this.vy = Math.max(-GRAV_MAX_V, this.vy - effGrav() * gravityFactor); // cae hacia arriba
-            else this.vy += effGrav() * gravityFactor;
+            this.vy += effGrav() * gravityFactor;
             this.rotation += this.angularVelocity;
         } else {
             this.vy = 0;
@@ -656,6 +594,9 @@ const precisionSystem = {
         this.targetArea.y = height - this.targetArea.h - 120;
     },
 
+    // Tamaño base de la zona verde (la caja psicodélica la fija en el 33 %)
+    greenBase() { return boxKind() === 'psychedelic' ? PSY_GREEN : this.targetArea.greenScale; },
+
     spawnBall() {
         this.ball.x = this.canal.x + this.canal.w / 2;
         this.ball.y = -50;
@@ -701,7 +642,7 @@ const precisionSystem = {
             let tier = "MISSED", multiplier = 0, subScore = 0;
 
             // Item Power: Zona verde x5
-            const currentGreenScale = greenPowerActive > 0 ? Math.min(1.0, this.targetArea.greenScale * 5) : this.targetArea.greenScale;
+            const currentGreenScale = greenPowerActive > 0 ? Math.min(1.0, this.greenBase() * 5) : this.greenBase();
             if (greenPowerActive > 0) greenPowerActive--;
 
             const greenLimit = maxDist * currentGreenScale;
@@ -757,7 +698,7 @@ const precisionSystem = {
         const areaY = this.targetArea.y, areaH = this.targetArea.h, centerY = areaY + areaH / 2;
         const halfArea = areaH / 2;
         // Mismos límites que usa checkHit(): greenLimit / yellowLimit relativos a maxDist (=halfArea)
-        const currentGreenScale = greenPowerActive > 0 ? Math.min(1.0, this.targetArea.greenScale * 5) : this.targetArea.greenScale;
+        const currentGreenScale = greenPowerActive > 0 ? Math.min(1.0, this.greenBase() * 5) : this.greenBase();
         const greenHalf = halfArea * currentGreenScale;
         const yellowHalf = Math.max(greenHalf, halfArea * 0.65);
         const greenH = greenHalf * 2;
@@ -788,7 +729,8 @@ const precisionSystem = {
         }
         ctx.strokeStyle = '#00ff64'; ctx.strokeRect(tx, gY, tw, greenH);
 
-        if (this.ball.active) {
+        const hideBall = boxKind() === 'psychedelic' && this.ball.y > height / 2; // psicodélica: la bola desaparece de la mitad de la pantalla hacia abajo
+        if (this.ball.active && !hideBall) {
             ctx.shadowBlur = 20; ctx.shadowColor = THEME.ball;
             const ballGrad = ctx.createRadialGradient(this.ball.x, this.ball.y, 0, this.ball.x, this.ball.y, this.ball.radius);
             ballGrad.addColorStop(0, '#fff'); ballGrad.addColorStop(0.3, THEME.ball); ballGrad.addColorStop(1, 'rgba(255, 0, 234, 0)');
@@ -1334,10 +1276,10 @@ function createExplosion(x, y, multiplier) {
 function computeJump(precision) {
     const { multiplier, tier } = precision;
     if (!player.onGround || multiplier <= 0) return null;
-    if (boxKind() === 'gravity') return computeGravityJump(tier);
     const candidates = platforms.filter(p => p.y < player.y).sort((a, b) => b.y - a.y);
     if (candidates.length === 0) return null;
-    const target = candidates[0];
+    // Psicodélica + zona verde: salta directo a la 3.ª plataforma por encima (o a la meta)
+    const target = (boxKind() === 'psychedelic' && tier === "PERFECT") ? (psychedelicTarget() || candidates[0]) : candidates[0];
     const distY = player.y - target.y + player.h;
 
     const targetMultiplier = (tier === "PERFECT") ? 1.08 : (tier === "GOOD" ? 1.45 : (Math.random() > 0.5 ? 2.0 : 0.4));
@@ -1371,36 +1313,16 @@ function handleJump(precision) {
 // Simula el salto con la MISMA física del juego (gravedad + viento + paredes + plataformas)
 function simulateJump(j, vx0) {
     let x = player.x, y = player.y, vx = vx0, vy = j.vy;
-    const grav = boxKind() === 'gravity';
     const pts = [];
     let tTarget = null, landing = null;
     for (let step = 1; step <= 500; step++) {
         const prevBottom = y + player.h, prevTop = y;
         vx += effWind();
-        if (grav) vy = Math.max(-GRAV_MAX_V, vy - effGrav() * gravityFactor); else vy += effGrav() * gravityFactor;
+        vy += effGrav() * gravityFactor;
         x += vx; y += vy;
         if (x < 0) { x = 0; if (boxKind() === 'rubber') vx = Math.abs(vx) * 0.85; }
         if (x + player.w > width) { x = width - player.w; if (boxKind() === 'rubber') vx = -Math.abs(vx) * 0.85; }
         const bottom = y + player.h;
-
-        if (grav) { // gravedad invertida: sube y se agarra a la cara inferior
-            const tb = j.target.y + j.target.h;
-            if (tTarget === null && prevTop > tb && y <= tb) tTarget = step;
-            if (step % 2 === 0) pts.push({ x: x + player.w / 2, y: y + player.h / 2 });
-            if (vy < 0) {
-                for (const p of platforms) {
-                    if (p === player.currentPlatform || (p.type === 'flash' && !p.isVisible)) continue;
-                    if (x + player.w > p.x && x < p.x + p.w && y <= p.y + p.h && y >= p.y - 12) {
-                        landing = { x: x + player.w / 2, y: p.y + p.h, onTarget: p === j.target, under: true };
-                        pts.push({ x: landing.x, y: p.y + p.h + player.h / 2 });
-                        break;
-                    }
-                }
-                if (landing) break;
-            }
-            if (y < -400) break;
-            continue;
-        }
 
         if (vy >= 0 && tTarget === null && prevBottom < j.target.y && bottom >= j.target.y) tTarget = step;
         if (step % 2 === 0) pts.push({ x: x + player.w / 2, y: y + player.h / 2 });
@@ -1499,7 +1421,7 @@ const aim = {
         if (land) {
             ctx.strokeStyle = col; ctx.lineWidth = 2;
             ctx.shadowBlur = 12; ctx.shadowColor = col;
-            const ly = land.under ? land.y : land.y - player.h;
+            const ly = land.y - player.h;
             ctx.strokeRect(land.x - player.w / 2, ly, player.w, player.h);
             ctx.globalAlpha = 0.15 * pulse + 0.1; ctx.fillStyle = col;
             ctx.fillRect(land.x - player.w / 2, ly, player.w, player.h);
@@ -1590,7 +1512,6 @@ function drawWindHUD() {
 }
 
 function checkCollisions() {
-    const wasOnGround = player.onGround;
     player.onGround = false;
 
     // Colisión Jugador con Obstáculos
@@ -1638,9 +1559,6 @@ function checkCollisions() {
             }
         }
     });
-
-    // Caja de gravedad: se agarra por debajo (lógica propia)
-    if (boxKind() === 'gravity') { gravityCollisions(wasOnGround); return; }
 
     // Colisión Jugador con Plataformas
     platforms.forEach(p => {
@@ -1977,7 +1895,7 @@ function platformBelow() {
         player.x + player.w + 14 > p.x && player.x - 14 < p.x + (p.type === 'temp_full' ? width : p.w));
 }
 function maybeStartRescue() {
-    if (rescue.active || rescue.usedThisLevel || runEnded || hasShield || bombActive || boxKind() === 'gravity') return false;
+    if (rescue.active || rescue.usedThisLevel || runEnded || hasShield || bombActive) return false;
     if (player.onGround || player.vy <= 1) return false;                 // solo cayendo
     if (player.y + player.h < height * RESCUE_TRIGGER) return false;     // aún queda mucha caída
     if (platformBelow()) return false;                                   // hay algo que te recoja
@@ -2183,7 +2101,6 @@ function update() {
         lava.y += diff; lava.targetY += diff;
     }
 
-    gravityTopCheck();
     trackHeight();
     updateParticles();
 }
