@@ -37,9 +37,9 @@
                     <div class="inv-slot" id="slot-2" data-key="3"></div>
                 </div>
                 <div id="score-container" class="hud-item right">
-                    <span class="hud-label">PUNTOS</span>
-                    <span id="score-value">0</span>
-                    <span id="best-label">Mejor: <span id="best-value">0</span></span>
+                    <span class="hud-label">ALTURA</span>
+                    <span id="score-value">0 cm</span>
+                    <span id="best-label">Mejor: <span id="best-value">Nv 1 · 0 cm</span></span>
                 </div>
             </div>
             <div id="combo-container" class="hidden">
@@ -101,8 +101,8 @@
                         Aterriza en una plataforma con cofre: se abre y una tragaperras rellena tus huecos libres (máx. 3 objetos).
                     </div>
                     <div class="help-item">
-                        <strong>💰 Coste</strong>
-                        Usar un objeto (tocándolo) cuesta 1000 pts. Puedes quedarte en negativo hasta -2000.
+                        <strong>👆 Uso</strong>
+                        Toca un objeto del inventario para usarlo. Es gratis.
                     </div>
                     <div class="help-item"><strong>⏱️ Reloj:</strong> Ralentiza la bola a la mitad por 10s.</div>
                     <div class="help-item"><strong>🏗️ Plataforma:</strong> Crea un puente de ancho total bajo tus pies.</div>
@@ -148,7 +148,7 @@
                     <h2 id="go-title">FIN DEL JUEGO</h2>
                     <p id="go-note" class="go-note hidden"></p>
                     <div class="stats-final">
-                        <p>PUNTUACIÓN: <span id="final-score">0</span></p>
+                        <p>ALTURA: <span id="final-score">0</span> cm</p>
                         <p>NIVEL ALCANZADO: <span id="final-level">1</span></p>
                     </div>
                     <button id="restart-btn">REINTENTAR</button>
@@ -219,15 +219,15 @@
             </div>
         </div>
 
-        <script src="game.js?v=17"></script>
+        <script src="game.js?v=18"></script>
 
         <!-- SDK "compat" de Firebase: archivos únicos clásicos, sin import/export
              encadenados, para máxima compatibilidad entre navegadores/dispositivos. -->
         <script src="https://www.gstatic.com/firebasejs/10.13.2/firebase-app-compat.js"></script>
         <script src="https://www.gstatic.com/firebasejs/10.13.2/firebase-auth-compat.js"></script>
         <script src="https://www.gstatic.com/firebasejs/10.13.2/firebase-firestore-compat.js"></script>
-        <script src="backend.js?v=7"></script>
-        <script src="modes.js?v=2"></script>
+        <script src="backend.js?v=8"></script>
+        <script src="modes.js?v=3"></script>
     </div>
 </body>
 

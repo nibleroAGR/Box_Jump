@@ -25,7 +25,6 @@ const bestValueEl = document.getElementById('best-value');
 // CONFIGURACIÓN GLOBAL
 let width, height;
 let gameActive = false;
-let score = 0;
 let level = 1;
 let platformsInLevel = 5;
 let platformsReached = 0;
@@ -34,12 +33,31 @@ let platforms = [];
 let props = [];
 let particles = [];
 
-// Mejor puntuación histórica (persistida en este navegador)
-let bestScore = 0;
+// ALTURA: se mide en centímetros (1 px = 1 cm; la caja mide 30 cm).
+// cameraScroll acumula lo que baja el mundo al subir la cámara, así la altura es "de mundo".
+let cameraScroll = 0;
+let levelBaseH = 0;   // altura (mundo) de la plataforma desde la que empieza el nivel
+let levelMaxH = 0;    // máxima altura alcanzada en el nivel actual (px = cm)
+const heightCm = () => Math.max(0, Math.round(levelMaxH));
+function resetLevelHeight() {
+    levelBaseH = cameraScroll - platforms[0].y;
+    levelMaxH = 0;
+    updateHeightDisplay();
+}
+function trackHeight() {
+    const h = cameraScroll - (player.y + player.h) - levelBaseH;
+    if (h > levelMaxH) { levelMaxH = h; updateHeightDisplay(); }
+}
+
+// Mejor marca histórica en este navegador: nivel y, a igualdad, altura
+let bestRun = { level: 1, height: 0 };
 try {
-    bestScore = parseInt(localStorage.getItem('boxjump_best_score'), 10) || 0;
-} catch (e) { bestScore = 0; }
-if (bestValueEl) bestValueEl.innerText = bestScore;
+    const br = JSON.parse(localStorage.getItem('boxjump_best_run') || 'null');
+    if (br && br.level >= 1) bestRun = { level: br.level | 0, height: br.height | 0 };
+} catch (e) { /* almacenamiento no disponible */ }
+const betterRun = (l, h, b) => l > b.level || (l === b.level && h > b.height);
+const bestRunText = () => `Nv ${bestRun.level} · ${bestRun.height} cm`;
+if (bestValueEl) bestValueEl.innerText = bestRunText();
 
 // Partida guardada (checkpoint cada 5 niveles), recibida al iniciar sesión
 let savedGameData = null;
@@ -142,13 +160,14 @@ function updateStartScreenUI() {
     if (gameOverNewBtn) gameOverNewBtn.classList.toggle('hidden', !hasCheckpoint);
 }
 
-function updateScoreDisplay() {
-    scoreValue.innerText = score;
-    if (gameMode === 'normal' && score > bestScore) {
-        bestScore = score;
-        try { localStorage.setItem('boxjump_best_score', String(bestScore)); } catch (e) { /* almacenamiento no disponible */ }
+function updateHeightDisplay() {
+    const h = heightCm();
+    scoreValue.innerText = h + ' cm';
+    if (gameMode === 'normal' && !runEnded && betterRun(level, h, bestRun)) {
+        bestRun = { level, height: h };
+        try { localStorage.setItem('boxjump_best_run', JSON.stringify(bestRun)); } catch (e) { /* no disponible */ }
     }
-    bestValueEl.innerText = bestScore;
+    bestValueEl.innerText = bestRunText();
 }
 
 function updateComboDisplay() {
@@ -213,8 +232,6 @@ let reelTimer = null;
 // Cofres y objetos
 const ITEM_POOL = ['clock', 'platform', 'power', 'bomb', 'sticky'];
 const ITEM_ICONS = { clock: '⏱️', platform: '🏗️', power: '⚡', bomb: '💣', sticky: '🧪' };
-const ITEM_COST = 1000;   // usar un objeto cuesta puntos
-const MAX_DEBT = 2000;    // se puede quedar en negativo hasta -2000
 const MAX_INV = 3;
 const CHEST_CHANCE = 0.12; // probabilidad de cofre por plataforma
 
@@ -344,7 +361,7 @@ const precisionSystem = {
         this.targetArea.greenScale = Math.min(0.9, Math.max(0.05, 0.45 - (difficultyFactor * 0.3) + levelEase));
 
         const randomVariance = (Math.random() - 0.5) * 1.5;
-        this.ball.speed = (5 + (Math.min(score, 6000) * 0.004) + (difficultyFactor * 2.5)) + randomVariance;
+        this.ball.speed = (5 + (Math.min(level - 1, 20) * 0.8) + (difficultyFactor * 2.5)) + randomVariance;
         if (this.ball.speed < 4) this.ball.speed = 4;
         if (this.ball.speed > 16) this.ball.speed = 16;
     },
@@ -390,14 +407,9 @@ const precisionSystem = {
                 combo = 0;
             }
 
-            // Bono por combo
-            const comboBonus = 1 + (combo > 1 ? combo * 0.1 : 0);
-            const points = Math.round(subScore * 100 * comboBonus);
-            score += points;
-            updateScoreDisplay();
             updateComboDisplay();
 
-            let feedback = tier + (tier === "PERFECT" ? ` x${Math.round(subScore * 5)}` : "") + " +" + points;
+            let feedback = tier + (tier === "PERFECT" ? ` x${Math.round(subScore * 5)}` : "");
             if (combo > 1) feedback += `\nCOMBO x${combo}!`;
             showFeedback(feedback);
 
@@ -503,10 +515,6 @@ class Prop {
 
         if (this.y > height && !this.isOffScreen) {
             this.isOffScreen = true;
-            const extraPoints = Math.round(50 * this.weight);
-            score += extraPoints;
-            updateScoreDisplay();
-            showFeedback("+PUNTOS EXTRA! +" + extraPoints);
             return false;
         }
         return true;
@@ -833,7 +841,7 @@ function useShield() {
     createExplosion(player.x, player.y, 1.0);
 }
 
-function initPlatforms(startLevel = 1, startScore = 0) {
+function initPlatforms(startLevel = 1) {
     platforms = [];
     props = [];
     obstacles = [];
@@ -843,7 +851,7 @@ function initPlatforms(startLevel = 1, startScore = 0) {
     aim.cancel();
     originY = null; player.rocket = false;
     level = Math.max(1, startLevel);
-    score = Math.max(0, startScore);
+    cameraScroll = 0;
     platformsInLevel = levelPlatformCount();
     platformsReached = 0; totalPlatformGlobalCount = 0;
     combo = 0; rollEnvironment(false);
@@ -853,11 +861,12 @@ function initPlatforms(startLevel = 1, startScore = 0) {
     if (clockTimeoutId) { clearTimeout(clockTimeoutId); clockTimeoutId = null; }
 
     setLevelHUD();
-    updateScoreDisplay();
+    updateHeightDisplay();
     updateComboDisplay();
 
     const startCx = width / 2 + (precisionSystem.side === 'left' ? 30 : 0);
     platforms.push(new Platform(startCx - 50, height - 150, 100, 20));
+    resetLevelHeight();
     player.x = startCx - player.w / 2;
     player.y = height - 150 - player.h;
     player.vx = 0;
@@ -937,13 +946,14 @@ function nextLevel() {
 
     // Guardado automático cada 5 niveles (checkpoint) — solo en la partida normal
     if (gameMode === 'normal' && level % 5 === 0 && window.BJFirebase && window.BJFirebase.isSignedIn()) {
-        window.BJFirebase.saveProgress(score, level);
-        savedGameData = { score, level };
+        window.BJFirebase.saveProgress(level);
+        savedGameData = { level };
         updateStartScreenUI();
     }
 
     const current = player.currentPlatform;
     platforms = [current];
+    resetLevelHeight();
     props = [];
     obstacles = [];
     powerups = [];
@@ -1399,6 +1409,7 @@ function update() {
         if (player.onGround && diff > 8) diff = Math.max(8, diff * 0.2);
         if (originY !== null && !player.currentPlatform) originY += diff;
         particles.forEach(pt => pt.y += diff);
+        cameraScroll += diff;
         player.y += diff;
         platforms.forEach(p => p.y += diff);
         props.forEach(pr => pr.y += diff);
@@ -1407,6 +1418,7 @@ function update() {
         blackHoles.forEach(bh => bh.y += diff);
     }
 
+    trackHeight();
     updateParticles();
 }
 
@@ -1488,9 +1500,9 @@ function startGame(continueGame = false, cfg = null) {
     if (rankingFab) rankingFab.classList.remove('hidden');
 
     const resume = !cfg && continueGame && savedGameData && savedGameData.level > 1;
-    initPlatforms(cfg ? cfg.first : (resume ? savedGameData.level : 1), resume ? (savedGameData.score || 0) : 0);
+    initPlatforms(cfg ? cfg.first : (resume ? savedGameData.level : 1));
     setLevelHUD();
-    updateScoreDisplay();
+    updateHeightDisplay();
     precisionSystem.spawnBall();
 }
 function endGame() { finishRun(false); }
@@ -1503,16 +1515,17 @@ function finishRun(completed) {
     gameActive = false;
     aim.cancel();
     const cleared = modeCfg ? (completed ? modeCfg.last - modeCfg.first + 1 : level - modeCfg.first) : level - 1;
-    finalScore.innerText = score;
+    const finalHeight = heightCm();
+    finalScore.innerText = finalHeight;
     finalLevel.innerText = hudLevel();
     if (rankingFab) rankingFab.classList.add('hidden');
     updateStartScreenUI();
 
     let info = {};
     if (modeCfg && modeCfg.onEnd) {
-        try { info = modeCfg.onEnd({ completed, score, level, cleared }) || {}; } catch (e) { console.error(e); }
+        try { info = modeCfg.onEnd({ completed, level, height: finalHeight, cleared }) || {}; } catch (e) { console.error(e); }
     } else if (gameMode === 'normal' && window.BJFirebase) {
-        window.BJFirebase.reportScore(score, level);
+        window.BJFirebase.reportRun(level, finalHeight);
     }
 
     goTitle.innerText = info.title || (completed ? '¡FASE COMPLETADA!' : 'FIN DEL JUEGO');
@@ -1532,7 +1545,7 @@ function finishRun(completed) {
 
 // Vuelve al menú principal (abandona la partida en curso)
 function goToMenu() {
-    if (!runEnded && gameMode === 'normal' && window.BJFirebase) window.BJFirebase.reportScore(score, level);
+    if (!runEnded && gameMode === 'normal' && window.BJFirebase) window.BJFirebase.reportRun(level, heightCm());
     runEnded = true; gameActive = false; bombActive = false;
     aim.cancel(); cancelReels(); updateInventoryUI();
     modeCfg = null; gameMode = 'normal';
@@ -1560,15 +1573,16 @@ window.__bjCloseRanking = () => {
     window.__bjWasPlaying = false;
 };
 
-// Si el mejor puntaje remoto (Firebase) es mayor que el local, lo adoptamos.
+// Si la mejor marca remota (Firebase: nivel y altura) es mayor que la local, la adoptamos.
 // También recibimos aquí la partida guardada (checkpoint) para ofrecer "Continuar".
 window.addEventListener('bj-auth-changed', (e) => {
     if (e.detail && e.detail.signedIn) {
-        if (typeof e.detail.bestScore === 'number' && e.detail.bestScore > bestScore) {
-            bestScore = e.detail.bestScore;
-            try { localStorage.setItem('boxjump_best_score', String(bestScore)); } catch (err) { /* no disponible */ }
+        const remote = { level: e.detail.bestLevel || 1, height: e.detail.bestHeight || 0 };
+        if (betterRun(remote.level, remote.height, bestRun)) {
+            bestRun = remote;
+            try { localStorage.setItem('boxjump_best_run', JSON.stringify(bestRun)); } catch (err) { /* no disponible */ }
         }
-        if (bestValueEl) bestValueEl.innerText = bestScore;
+        if (bestValueEl) bestValueEl.innerText = bestRunText();
         savedGameData = e.detail.savedGame || null;
     } else {
         savedGameData = null;
@@ -1644,15 +1658,12 @@ window.addEventListener('touchstart', (e) => {
     triggerAction(e);
 }, { passive: false });
 
-// INVENTARIO (los objetos salen de los cofres; usarlos cuesta puntos)
+// INVENTARIO (los objetos salen de los cofres; usarlos es gratis)
 const game = {
     useItem(index) {
         if (!gameActive || runEnded || aim.active || !inventory[index]) return;
-        if (score - ITEM_COST < -MAX_DEBT) { showFeedback("¡DEUDA MÁXIMA! (-" + MAX_DEBT + ")"); return; }
         const type = inventory[index];
         inventory.splice(index, 1);
-        score -= ITEM_COST;
-        updateScoreDisplay();
         updateInventoryUI();
 
         switch (type) {

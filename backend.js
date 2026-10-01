@@ -9,11 +9,11 @@
    Contrato con game.js (no se toca game.js, solo se respeta esta API):
      - window.BJFirebase.isSignedIn()          -> boolean
      - window.BJFirebase.promptSignIn()        -> abre el login
-     - window.BJFirebase.reportScore(score, level)
-     - window.BJFirebase.saveProgress(score, level)
+     - window.BJFirebase.reportRun(level, heightCm)   (nivel alcanzado y altura en ese nivel)
+     - window.BJFirebase.saveProgress(level)
      - evento 'bj-auth-changed' en window, con detail:
          { signedIn: false }
-         { signedIn: true, uid, bestScore, username, savedGame }
+         { signedIn: true, uid, bestLevel, bestHeight, username, savedGame }
    ===================================================================== */
 (function () {
     'use strict';
@@ -197,8 +197,9 @@
                 friendCodeLower: username.toLowerCase(),
                 friendCodeCustom: false,
                 photoURL: user.photoURL || '',
-                bestScore: 0,
                 bestLevel: 1,
+                bestHeight: 0,
+                bestRank: RANK_BASE, // = bestLevel * RANK_BASE + bestHeight (permite ordenar sin índice compuesto)
                 friends: [],
                 savedGame: null,
                 createdAt: firebase.firestore.FieldValue.serverTimestamp(),
@@ -225,6 +226,12 @@
             patch.friendCode = code;
             patch.friendCodeLower = code.toLowerCase();
             patch.friendCodeCustom = !!data.friendCodeCustom;
+        }
+        // Migración desde el sistema de puntos: calcula la clave de ranking (nivel, altura)
+        if (typeof data.bestRank !== 'number') {
+            patch.bestLevel = data.bestLevel || 1;
+            patch.bestHeight = data.bestHeight || 0;
+            patch.bestRank = patch.bestLevel * RANK_BASE + patch.bestHeight;
         }
         await ref.update(patch);
         return { ...data, ...patch };
@@ -288,33 +295,36 @@
         }
     }
 
-    async function reportScore(score, level) {
+    // Guarda tu mejor marca: primero cuenta el nivel y, a igualdad, la altura (cm) alcanzada en él.
+    async function reportRun(level, height) {
         if (!currentUser) return;
         try {
             const ref = users().doc(currentUser.uid);
             const snap = await ref.get();
-            const data = snap.exists ? snap.data() : { bestScore: 0, bestLevel: 1 };
-            const patch = {};
-            if (score > (data.bestScore || 0)) patch.bestScore = score;
-            if (level > (data.bestLevel || 1)) patch.bestLevel = level;
-            if (Object.keys(patch).length) {
+            const data = snap.exists ? snap.data() : {};
+            const oldRank = typeof data.bestRank === 'number'
+                ? data.bestRank
+                : (data.bestLevel || 1) * RANK_BASE + (data.bestHeight || 0);
+            const h = Math.max(0, Math.min(RANK_BASE - 1, Math.round(height || 0)));
+            const newRank = level * RANK_BASE + h;
+            if (newRank > oldRank) {
                 await ref.update({
-                    ...patch,
+                    bestLevel: level, bestHeight: h, bestRank: newRank,
                     displayName: currentUser.displayName || 'Jugador',
                     photoURL: currentUser.photoURL || '',
                     updatedAt: firebase.firestore.FieldValue.serverTimestamp(),
                 });
             }
         } catch (err) {
-            console.error('No se pudo guardar la puntuación:', err);
+            console.error('No se pudo guardar la marca:', err);
         }
     }
 
-    async function saveProgress(score, level) {
+    async function saveProgress(level) {
         if (!currentUser) return;
         try {
             await users().doc(currentUser.uid).update({
-                savedGame: { score, level, updatedAt: Date.now() },
+                savedGame: { level, updatedAt: Date.now() },
             });
         } catch (err) {
             console.error('No se pudo guardar el progreso:', err);
@@ -324,29 +334,21 @@
     // ---------------------------------------------------------------
     // 5) Ranking (global y amigos)
     // ---------------------------------------------------------------
-    // Orden del ranking: primero el nivel máximo alcanzado y después los puntos.
-    const rankCompare = (a, b) =>
-        ((b.bestLevel || 1) - (a.bestLevel || 1)) || ((b.bestScore || 0) - (a.bestScore || 0));
+    // Orden del ranking: primero el nivel máximo alcanzado y después la altura (cm) en ese nivel.
+    const RANK_BASE = 100000;
+    const rankKeyOf = (u) => (typeof u.bestRank === 'number' ? u.bestRank : (u.bestLevel || 1) * RANK_BASE + (u.bestHeight || 0));
+    const rankCompare = (a, b) => rankKeyOf(b) - rankKeyOf(a);
 
     async function fetchGlobalTop(n) {
-        let docs;
-        try {
-            // Requiere un índice compuesto (bestLevel desc, bestScore desc)
-            const snap = await users().orderBy('bestLevel', 'desc').orderBy('bestScore', 'desc').limit(n).get();
-            docs = snap.docs;
-        } catch (err) {
-            // Sin índice: se pide por nivel y se desempata por puntos en el cliente
-            console.warn('Falta el índice compuesto del ranking; usando ordenación en cliente.', err);
-            const snap = await users().orderBy('bestLevel', 'desc').limit(Math.max(n * 5, 100)).get();
-            docs = snap.docs;
-        }
-        return docs.map((d) => ({ uid: d.id, ...d.data() })).sort(rankCompare).slice(0, n);
+        // Campo único (bestRank): no necesita índice compuesto
+        const snap = await users().orderBy('bestRank', 'desc').limit(n).get();
+        return snap.docs.map((d) => ({ uid: d.id, ...d.data() }));
     }
 
     async function fetchFriendsTop() {
         if (!currentUser) return [];
         const mySnap = await users().doc(currentUser.uid).get();
-        const myData = mySnap.exists ? mySnap.data() : { friends: [], bestScore: 0 };
+        const myData = mySnap.exists ? mySnap.data() : { friends: [], bestLevel: 1, bestHeight: 0 };
         const list = [{ uid: currentUser.uid, ...myData }];
         for (const fid of myData.friends || []) {
             try {
@@ -398,7 +400,7 @@
                 <span class="rank-pos">${medal}</span>
                 <img class="rank-avatar" src="${it.photoURL || ''}" onerror="this.style.visibility='hidden'" />
                 <span class="rank-name">${safeName}</span>
-                <span class="rank-score"><small class="rank-level">Nv ${it.bestLevel || 1}</small>${it.bestScore || 0}</span>
+                <span class="rank-score"><small class="rank-level">Nv ${it.bestLevel || 1}</small>${it.bestHeight || 0} cm</span>
             `;
             dom.rankingList.appendChild(row);
         });
@@ -411,7 +413,7 @@
         try {
             const items = isGlobal ? await fetchGlobalTop(20) : await fetchFriendsTop();
             const emptyMsg = isGlobal
-                ? 'Aún no hay puntuaciones. ¡Sé el primero!'
+                ? 'Aún no hay marcas. ¡Sé el primero!'
                 : 'Añade amigos con su código para ver su clasificación aquí.';
             renderRankingRows(items, emptyMsg);
         } catch (err) {
@@ -506,7 +508,8 @@
                 detail: {
                     signedIn: true,
                     uid: user.uid,
-                    bestScore: profile.bestScore || 0,
+                    bestLevel: profile.bestLevel || 1,
+                    bestHeight: profile.bestHeight || 0,
                     username: profile.username || user.displayName || 'Jugador',
                     savedGame: profile.savedGame || null,
                 },
@@ -623,21 +626,24 @@
         };
     }
 
-    // Fase diaria: solo se guarda si mejora el resultado previo del mismo día
+    // Fase diaria: res = { cleared, height, completed }. Cuenta el nivel alcanzado y, a igualdad, la altura.
+    // rankKey = nivelesSuperados * RANK_BASE + altura  (completar la fase = 10 niveles superados)
     async function reportDaily(key, res) {
         if (!currentUser) return;
         const ref = dailyCol(key).doc(currentUser.uid);
         const snap = await ref.get();
         const old = snap.exists ? snap.data() : null;
-        if (old && (old.score > res.score || (old.score === res.score && (old.cleared || 0) >= res.cleared))) return;
+        const h = Math.max(0, Math.min(RANK_BASE - 1, Math.round(res.height || 0)));
+        const rankKey = res.cleared * RANK_BASE + h;
+        if (old && (old.rankKey || 0) >= rankKey) return;
         const who = await myIdentity();
         await ref.set({
             uid: currentUser.uid, username: who.username, photoURL: who.photoURL,
-            score: res.score, cleared: res.cleared, completed: !!res.completed, updatedAt: ts(),
+            cleared: res.cleared, height: h, completed: !!res.completed, rankKey, updatedAt: ts(),
         });
     }
     async function getDailyTop(key, n) {
-        const snap = await dailyCol(key).orderBy('score', 'desc').limit(n || 20).get();
+        const snap = await dailyCol(key).orderBy('rankKey', 'desc').limit(n || 20).get();
         return snap.docs.map((d) => ({ uid: d.id, ...d.data() }));
     }
     async function getMyDaily(key) {
@@ -710,7 +716,7 @@
     window.BJFirebase = {
         isSignedIn: () => !!currentUser,
         promptSignIn: () => dom.googleBtn.click(),
-        reportScore,
+        reportRun,
         saveProgress,
         uid: () => (currentUser ? currentUser.uid : null),
         reportDaily, getDailyTop, getMyDaily,

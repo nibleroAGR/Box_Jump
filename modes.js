@@ -48,7 +48,7 @@
             div.innerHTML = `<span class="rank-pos">${medal}</span>
                 <img class="rank-avatar" src="${esc(r.photoURL)}" onerror="this.style.visibility='hidden'" />
                 <span class="rank-name">${esc(r.username)}</span>
-                <span class="rank-score"><small class="rank-level">${r.completed ? '✔ ' : ''}${r.cleared || 0}/${DAILY_TOTAL}</small>${r.score || 0}</span>`;
+                <span class="rank-score"><small class="rank-level">${r.completed ? '✔ ' : 'Nv '}${r.completed ? DAILY_TOTAL : Math.min(DAILY_TOTAL, (r.cleared || 0) + 1)}/${DAILY_TOTAL}</small>${r.height || 0} cm</span>`;
             el.appendChild(div);
         });
     }
@@ -64,7 +64,7 @@
             await pendingReport; // si acabas de jugar, espera a que se guarde el resultado
             const [top, mine] = await Promise.all([FB().getDailyTop(key, 20), FB().getMyDaily(key)]);
             $('daily-mine').innerText = mine
-                ? `Tu mejor hoy: ${mine.score} pts · ${mine.cleared || 0}/${DAILY_TOTAL} niveles${mine.completed ? ' ✔' : ''}`
+                ? `Tu mejor hoy: ${mine.completed ? 'fase completada ✔' : 'nivel ' + Math.min(DAILY_TOTAL, (mine.cleared || 0) + 1) + '/' + DAILY_TOTAL} · ${mine.height || 0} cm`
                 : 'Aún no has jugado la fase de hoy.';
             renderDailyRows($('daily-list'), top);
         } catch (err) {
@@ -82,11 +82,11 @@
             type: 'daily', first: DAILY_FIRST, last: DAILY_FIRST + DAILY_TOTAL - 1, total: DAILY_TOTAL,
             seed: 'bj-daily-' + key,
             onEnd: (r) => {
-                pendingReport = FB().reportDaily(key, { score: r.score, cleared: r.cleared, completed: r.completed })
+                pendingReport = FB().reportDaily(key, { cleared: r.cleared, height: r.height, completed: r.completed })
                     .catch((e) => console.error('No se pudo guardar el resultado diario:', e));
                 return {
                     title: r.completed ? '¡FASE DIARIA COMPLETADA!' : 'FIN DE LA FASE DIARIA',
-                    note: `${r.cleared}/${DAILY_TOTAL} niveles · ${r.score} pts`,
+                    note: r.completed ? `10/${DAILY_TOTAL} niveles · ${r.height} cm en el último` : `Has llegado al nivel ${Math.min(DAILY_TOTAL, r.cleared + 1)}/${DAILY_TOTAL} · ${r.height} cm`,
                     primary: { text: '🏆 VER CLASIFICACIÓN', onClick: openDaily },
                 };
             },
@@ -242,7 +242,7 @@
                 if (r.completed) FB().bumpLevelStat(lv.id, 'completions');
                 return {
                     title: r.completed ? '¡FASE SUPERADA!' : 'FIN DEL JUEGO',
-                    note: `«${lv.name}» · ${r.cleared}/${N_LEVELS} niveles · ${r.score} pts`,
+                    note: `«${lv.name}» · nivel ${Math.min(N_LEVELS, r.cleared + 1)}/${N_LEVELS} · ${r.height} cm`,
                     primary: { text: 'VOLVER A LA COMUNIDAD', onClick: () => openCreator('community') },
                 };
             },
