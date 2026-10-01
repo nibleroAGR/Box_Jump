@@ -1030,7 +1030,7 @@ button:disabled { opacity: 0.35; pointer-events: none; filter: grayscale(0.6); }
 #creator-btn { background: linear-gradient(135deg, var(--secondary), #a600ff); color: #fff; box-shadow: 0 10px 20px rgba(166, 0, 255, 0.25); }
 #daily-btn { background: linear-gradient(135deg, var(--accent), #ff7a00); box-shadow: 0 10px 20px rgba(255, 174, 0, 0.2); }
 
-#home-fab {
+#home-fab, #info-fab {
     width: 46px; height: 46px; border-radius: 50%;
     background: var(--glass); border: 1px solid var(--border);
     display: flex; align-items: center; justify-content: center;
@@ -1092,3 +1092,15 @@ button:disabled { opacity: 0.35; pointer-events: none; filter: grayscale(0.6); }
     padding: 0.6rem 1rem; border-radius: 12px; font-size: 0.8rem; z-index: 400;
     pointer-events: none; max-width: 85%; text-align: center;
 }
+
+
+/* --- Tragaperras del inventario y ventana de objetos --- */
+.inv-slot.spinning { border-color: var(--accent); box-shadow: 0 0 14px var(--accent); animation: reelShake 0.16s linear infinite; filter: blur(0.7px); }
+.inv-slot.landed { animation: slotLand 0.5s ease-out; }
+@keyframes reelShake { 0% { transform: translateY(-3px); } 50% { transform: translateY(3px); } 100% { transform: translateY(-3px); } }
+@keyframes slotLand { 0% { transform: scale(1.5); box-shadow: 0 0 25px #ffd700; border-color: #ffd700; } 100% { transform: scale(1); } }
+
+#items-modal { background: rgba(5, 11, 24, 0.95); backdrop-filter: blur(20px); }
+.items-card { max-width: 340px; width: 90%; padding: 1.4rem 1.2rem; text-align: left; }
+.items-card h3 { text-align: center; color: var(--primary); margin-bottom: 1rem; }
+#close-items-btn { margin-top: 6px; }

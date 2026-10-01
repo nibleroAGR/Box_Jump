@@ -18,9 +18,6 @@ const startScreen = document.getElementById('start-screen');
 const gameOverScreen = document.getElementById('game-over-screen');
 const msgOverlay = document.getElementById('msg-overlay');
 const msgText = document.getElementById('msg-text');
-const shopFab = document.getElementById('shop-fab');
-const shopModal = document.getElementById('shop-modal');
-const closeShopBtn = document.getElementById('close-shop-btn');
 const comboContainer = document.getElementById('combo-container');
 const comboValueEl = document.getElementById('combo-value');
 const bestValueEl = document.getElementById('best-value');
@@ -120,6 +117,13 @@ function buildCustomLevel() {
         else if (it.k === 'shield' || it.k === 'dj') powerups.push(new PowerUp(cx - 10, y - 10, it.k === 'shield' ? 'shield' : 'doubleJump'));
         else if (it.k === 'hole') blackHoles.push(new BlackHole(cx, y, it.w || 35));
         else if (it.k === 'box') { const sz = it.w || 24; props.push(new Prop(cx - sz / 2, y - sz / 2, sz, sz, 'hsl(215, 80%, 60%)')); }
+        else if (it.k === 'chest') { // se pega a la plataforma más cercana en altura
+            const target = platforms.slice(1).reduce((b, q) => (!b || Math.abs(q.y - y) < Math.abs(b.y - y) ? q : b), null);
+            if (target) {
+                const cw = 26, t = target.w > cw ? Math.max(0, Math.min(1, (cx - cw / 2 - target.x) / (target.w - cw))) : 0;
+                chests.push(new Chest(target, t));
+            }
+        }
     });
 }
 function populateLevel() {
@@ -201,6 +205,18 @@ let clockTimeoutId = null;
 let greenPowerActive = 0;
 let platformItemActive = false;
 let bombActive = false;
+let stickyTurns = 0;      // turnos restantes de "caja pegajosa"
+let chests = [];          // cofres sobre plataformas
+let reels = [];           // rodillos de la tragaperras pendientes de parar
+let reelTimer = null;
+
+// Cofres y objetos
+const ITEM_POOL = ['clock', 'platform', 'power', 'bomb', 'sticky'];
+const ITEM_ICONS = { clock: '⏱️', platform: '🏗️', power: '⚡', bomb: '💣', sticky: '🧪' };
+const ITEM_COST = 1000;   // usar un objeto cuesta puntos
+const MAX_DEBT = 2000;    // se puede quedar en negativo hasta -2000
+const MAX_INV = 3;
+const CHEST_CHANCE = 0.12; // probabilidad de cofre por plataforma
 
 // --- PLAYER ---
 const player = {
@@ -283,6 +299,13 @@ const player = {
         ctx.fillRect(-this.w / 2, -this.h / 2, this.w, this.h);
         ctx.strokeStyle = 'rgba(255,255,255,0.5)';
         ctx.strokeRect(-this.w / 2 + 2, -this.h / 2 + 2, this.w - 4, this.h - 4);
+        if (stickyTurns > 0) { // mancha verde horizontal en la base
+            ctx.shadowBlur = 12; ctx.shadowColor = '#00ff64';
+            ctx.fillStyle = '#00ff64';
+            ctx.fillRect(-this.w / 2, this.h / 2 - 6, this.w, 6);
+            ctx.beginPath(); ctx.arc(-this.w / 4, this.h / 2, 3, 0, Math.PI * 2); ctx.fill();
+            ctx.beginPath(); ctx.arc(this.w / 5, this.h / 2 + 1, 2.5, 0, Math.PI * 2); ctx.fill();
+        }
         ctx.restore();
     }
 };
@@ -738,6 +761,68 @@ class BlackHole {
     }
 }
 
+class Chest {
+    constructor(platform, t) {
+        this.p = platform; this.t = t; // t: posición relativa sobre la plataforma (0..1)
+        this.w = 26; this.h = 20;
+        this.opened = false; this.age = 0;
+    }
+    get x() { return this.p.x + this.t * Math.max(0, this.p.w - this.w); }
+    get y() { return this.p.y - this.h; }
+    update() {
+        if (this.p.isBroken) return false;
+        if (this.opened && ++this.age > 50) return false;
+        return true;
+    }
+    draw() {
+        const x = this.x, y = this.y, w = this.w, h = this.h;
+        ctx.save();
+        ctx.globalAlpha = (this.p.alpha === undefined ? 1 : this.p.alpha) * (this.opened ? Math.max(0, 1 - this.age / 50) : 1);
+        ctx.shadowBlur = 12; ctx.shadowColor = '#ffd700';
+        if (this.opened) { // destello dorado saliendo del cofre
+            ctx.fillStyle = 'rgba(255, 215, 0, 0.35)';
+            ctx.fillRect(x + 4, y - 22, w - 8, 26);
+        }
+        ctx.fillStyle = '#8a5a2b'; ctx.fillRect(x, y + 8, w, h - 8);               // cuerpo
+        const lift = this.opened ? Math.min(10, this.age) : 0;
+        ctx.fillStyle = '#b07a3a'; ctx.fillRect(x - 1, y - lift, w + 2, 9);          // tapa
+        ctx.fillStyle = '#ffd700';
+        ctx.fillRect(x + w / 2 - 3, y + 5 - (this.opened ? 0 : 0), 6, 7);            // cerradura
+        ctx.fillRect(x, y + 8, w, 2);                                                // banda dorada
+        ctx.restore();
+    }
+}
+
+// Tragaperras: los huecos libres del inventario giran y se van parando uno a uno
+function openChest(c) {
+    const free = MAX_INV - inventory.length - reels.length;
+    if (free <= 0) { showFeedback("¡INVENTARIO LLENO!"); return; }
+    c.opened = true; c.age = 0;
+    createExplosion(c.x + c.w / 2, c.y, 1.0);
+    showFeedback("🎁 ¡COFRE ABIERTO!");
+    const now = performance.now();
+    const base = reels.length ? reels[reels.length - 1].stopAt : now + 500;
+    for (let i = 0; i < free; i++) {
+        reels.push({ final: ITEM_POOL[Math.floor(Math.random() * ITEM_POOL.length)], stopAt: base + (i + 1) * 450 });
+    }
+    if (!reelTimer) reelTimer = setInterval(tickReels, 70);
+    updateInventoryUI();
+}
+function tickReels() {
+    const now = performance.now();
+    while (reels.length && now >= reels[0].stopAt) {
+        inventory.push(reels.shift().final);
+        const el = document.getElementById(`slot-${inventory.length - 1}`);
+        if (el) { el.classList.remove('landed'); void el.offsetWidth; el.classList.add('landed'); }
+    }
+    if (!reels.length) { clearInterval(reelTimer); reelTimer = null; }
+    updateInventoryUI();
+}
+function cancelReels() {
+    if (reelTimer) clearInterval(reelTimer);
+    reelTimer = null; reels = [];
+}
+
 function useShield() {
     hasShield = false;
     player.vy = -15;
@@ -763,7 +848,7 @@ function initPlatforms(startLevel = 1, startScore = 0) {
     platformsReached = 0; totalPlatformGlobalCount = 0;
     combo = 0; rollEnvironment(false);
     hasShield = false; canDoubleJump = false; doubleJumpUsed = false;
-    inventory = []; updateInventoryUI();
+    cancelReels(); inventory = []; chests = []; stickyTurns = 0; updateInventoryUI();
     ballSpeedFactor = 1.0; greenPowerActive = 0; platformItemActive = false; bombActive = false;
     if (clockTimeoutId) { clearTimeout(clockTimeoutId); clockTimeoutId = null; }
 
@@ -794,7 +879,7 @@ function spawnNextPlatform(forceGoal = false) {
     const nextX = (precisionSystem.side === 'left' ? 50 : 30) + R() * (width - nextW - 80);
     // Tiradas siempre en el mismo orden (se usen o no): con la misma semilla el nivel sale idéntico
     const rType = R(), rIce = R(), rDirX = R(), rDirY = R(), rObs = R(), rObsSide = R(), rObsY = R(),
-        rPow = R(), rPowType = R(), rBH = R(), rBHx = R(), rBHr = R(), rProp = R(), rPw = R(), rPh = R(), rPx = R(), rHue = R();
+        rPow = R(), rPowType = R(), rBH = R(), rBHx = R(), rBHr = R(), rProp = R(), rPw = R(), rPh = R(), rPx = R(), rHue = R(), rChest = R(), rChestT = R();
 
     totalPlatformGlobalCount++;
 
@@ -810,7 +895,11 @@ function spawnNextPlatform(forceGoal = false) {
         else if (level >= 8 && rType < 0.55) type = 'moving';
     }
 
-    platforms.push(new Platform(nextX, nextY, nextW, 20, forceGoal, type, rDirX > 0.5, rDirY > 0.5));
+    const platform = new Platform(nextX, nextY, nextW, 20, forceGoal, type, rDirX > 0.5, rDirY > 0.5);
+    platforms.push(platform);
+
+    // Cofre (se abre al aterrizar en esta plataforma)
+    if (!forceGoal && type !== 'flash' && rChest < CHEST_CHANCE) chests.push(new Chest(platform, 0.12 + rChestT * 0.76));
 
     // Obstáculos (Nivel 15+)
     if (level >= 15 && rObs < 0.3) obstacles.push(new Obstacle({ rSide: rObsSide, rY: rObsY }));
@@ -858,6 +947,7 @@ function nextLevel() {
     props = [];
     obstacles = [];
     powerups = [];
+    chests = [];
     // Mantener agujeros negros si están cerca (en fases creadas cada nivel trae los suyos)
     blackHoles = gameMode === 'custom' ? [] : blackHoles.filter(bh => Math.abs(bh.y - player.y) < height);
 
@@ -1189,11 +1279,19 @@ function checkCollisions() {
                 player.currentPlatform = p;
                 platformsReached++;
                 doubleJumpUsed = false; // Reset salto doble al tocar suelo
+                chests.forEach(c => { if (c.p === p && !c.opened) openChest(c); });
+                // Caja pegajosa: se queda clavada pase lo que pase (inercia, fuerza de salto, tipo de plataforma)
+                let stuck = false;
+                if (stickyTurns > 0) {
+                    stuck = true; stickyTurns--;
+                    player.vx = 0; player.angularVelocity = 0;
+                    showFeedback(stickyTurns > 0 ? `🟢 ¡PEGADA! (${stickyTurns} más)` : '🟢 ¡PEGADA! (último)');
+                }
                 if ((p.type === 'vanishing' || p.type === 'fragile') && !p.vanishingStarted) {
                     p.vanishingStarted = true;
                     p.startTime = Date.now();
                 }
-                if (p.type === 'spring') {
+                if (p.type === 'spring' && !stuck) {
                     // Resorte: rebote automático hacia arriba, no requiere precisión del jugador
                     const distY = 220;
                     player.vy = -Math.sqrt(2 * player.gravity * distY) * 1.4;
@@ -1266,6 +1364,7 @@ function update() {
 
     // Actualizar entidades
     obstacles = obstacles.filter(obs => obs.update());
+    chests = chests.filter(c => c.update());
     powerups = powerups.filter(pu => pu.update());
     for (let i = props.length - 1; i >= 0; i--) {
         if (!props[i].update()) props.splice(i, 1);
@@ -1333,6 +1432,7 @@ function draw() {
 
     blackHoles.forEach(bh => bh.draw());
     platforms.forEach(p => p.draw());
+    chests.forEach(c => c.draw());
     powerups.forEach(pu => pu.draw());
     props.forEach(pr => pr.draw());
     obstacles.forEach(o => o.draw());
@@ -1350,6 +1450,11 @@ function draw() {
         ctx.fillStyle = THEME.doubleJump;
         ctx.font = "bold 12px Arial";
         ctx.fillText("2J READY", player.x, player.y - 10);
+    }
+    if (stickyTurns > 0) {
+        ctx.fillStyle = '#00ff64';
+        ctx.font = "bold 11px Arial";
+        ctx.fillText("PEGA x" + stickyTurns, player.x, player.y - (canDoubleJump ? 24 : 10));
     }
 
     particles.forEach(p => {
@@ -1429,9 +1534,9 @@ function finishRun(completed) {
 function goToMenu() {
     if (!runEnded && gameMode === 'normal' && window.BJFirebase) window.BJFirebase.reportScore(score, level);
     runEnded = true; gameActive = false; bombActive = false;
-    aim.cancel();
+    aim.cancel(); cancelReels(); updateInventoryUI();
     modeCfg = null; gameMode = 'normal';
-    [gameOverScreen, shopModal, document.getElementById('settings-modal'), document.getElementById('ranking-modal')]
+    [gameOverScreen, document.getElementById('items-modal'), document.getElementById('settings-modal'), document.getElementById('ranking-modal')]
         .forEach(el => el && el.classList.add('hidden'));
     if (rankingFab) rankingFab.classList.add('hidden');
     startScreen.classList.remove('hidden');
@@ -1528,7 +1633,7 @@ const triggerAction = (e) => {
 // disparar el salto (y sobre todo no se les debe hacer preventDefault, o no
 // funcionan ni los clics ni el teclado en móvil).
 const isUiTarget = (e) => !!(e.target && e.target.closest &&
-    e.target.closest('button, input, textarea, a, .screen, #hud-menu, #shop-fab, #ranking-fab, #settings-fab, #home-fab, #shop-modal, #ranking-modal, .inv-slot'));
+    e.target.closest('button, input, textarea, a, .screen, #hud-menu, #ranking-fab, #settings-fab, #home-fab, #info-fab, #items-modal, #ranking-modal, .inv-slot'));
 window.addEventListener('mousedown', (e) => {
     if (isUiTarget(e)) return;
     triggerAction(e);
@@ -1539,22 +1644,15 @@ window.addEventListener('touchstart', (e) => {
     triggerAction(e);
 }, { passive: false });
 
-// SHOP & INVENTORY LOGIC
+// INVENTARIO (los objetos salen de los cofres; usarlos cuesta puntos)
 const game = {
-    buyItem(type) {
-        if (score < 1000) { showFeedback("¡PUNTOS INSUFICIENTES!"); return; }
-        if (inventory.length >= 3) { showFeedback("¡INVENTARIO LLENO!"); return; }
-
-        score -= 1000;
-        updateScoreDisplay();
-        inventory.push(type);
-        updateInventoryUI();
-        showFeedback("¡COMPRADO: " + type.toUpperCase() + "!");
-    },
     useItem(index) {
-        if (aim.active || !inventory[index]) return;
+        if (!gameActive || runEnded || aim.active || !inventory[index]) return;
+        if (score - ITEM_COST < -MAX_DEBT) { showFeedback("¡DEUDA MÁXIMA! (-" + MAX_DEBT + ")"); return; }
         const type = inventory[index];
         inventory.splice(index, 1);
+        score -= ITEM_COST;
+        updateScoreDisplay();
         updateInventoryUI();
 
         switch (type) {
@@ -1564,12 +1662,13 @@ const game = {
                 clockTimeoutId = setTimeout(() => { ballSpeedFactor = 1.0; clockTimeoutId = null; }, 10000);
                 showFeedback("⏱️ TIEMPO RALENTIZADO!");
                 break;
-            case 'platform':
+            case 'platform': {
                 const newP = new Platform(0, player.y + 120, width, 25, false, 'temp_full');
                 newP.vanishingStarted = true; newP.startTime = Date.now();
                 platforms.push(newP);
                 showFeedback("🏗️ PLATAFORMA CREADA!");
                 break;
+            }
             case 'power':
                 greenPowerActive = 5;
                 showFeedback("⚡ ZONA VERDE x5!");
@@ -1579,29 +1678,31 @@ const game = {
                 gameActive = false;
                 showFeedback("💣 TOCA UNA PLATAFORMA PARA EXPLOTARLA");
                 break;
+            case 'sticky':
+                stickyTurns = 3;
+                showFeedback("🟢 ¡CAJA PEGAJOSA! 3 TURNOS");
+                break;
         }
     }
 };
 
 function updateInventoryUI() {
-    for (let i = 0; i < 3; i++) {
+    for (let i = 0; i < MAX_INV; i++) {
         const slot = document.getElementById(`slot-${i}`);
-        slot.innerHTML = '';
+        const spinning = !inventory[i] && i >= inventory.length && (i - inventory.length) < reels.length;
+        slot.classList.toggle('spinning', spinning);
         if (inventory[i]) {
-            const icons = { clock: '⏱️', platform: '🏗️', power: '⚡', bomb: '💣' };
-            slot.innerText = icons[inventory[i]];
+            slot.innerText = ITEM_ICONS[inventory[i]];
             slot.onclick = () => game.useItem(i);
+        } else if (spinning) { // efecto tragaperras: símbolos al azar hasta que el rodillo para
+            slot.innerText = ITEM_ICONS[ITEM_POOL[Math.floor(Math.random() * ITEM_POOL.length)]];
+            slot.onclick = null;
         } else {
+            slot.innerText = '';
             slot.onclick = null;
         }
     }
 }
-
-const shopInfoBtn = document.getElementById('shop-info-btn');
-const shopHelpOverlay = document.getElementById('shop-help-overlay');
-const closeHelpBtn = document.getElementById('close-help-btn');
-
-shopFab.onclick = () => { gameActive = false; shopModal.classList.remove('hidden'); };
 
 // Menú de tres líneas: despliega el carrito (tienda) y los trofeos (clasificación)
 const menuToggle = document.getElementById('menu-toggle');
@@ -1614,7 +1715,8 @@ function setMenuOpen(open) {
 }
 if (menuToggle) menuToggle.addEventListener('click', () => setMenuOpen(menuPanel.classList.contains('hidden')));
 const homeFab = document.getElementById('home-fab');
-[shopFab, rankingFab, homeFab].forEach((el) => { if (el) el.addEventListener('click', () => setMenuOpen(false)); });
+const infoFab = document.getElementById('info-fab');
+[rankingFab, homeFab, infoFab].forEach((el) => { if (el) el.addEventListener('click', () => setMenuOpen(false)); });
 if (homeFab) homeFab.addEventListener('click', () => {
     if (runEnded || confirm('¿Salir de la partida? Se perderá el progreso de esta carrera (excepto el último punto de control).')) exitRun();
 });
@@ -1659,10 +1761,20 @@ if (closeSettingsBtn) closeSettingsBtn.addEventListener('click', () => {
     settingsWasPlaying = false;
 });
 
-closeShopBtn.onclick = () => { gameActive = true; shopModal.classList.add('hidden'); };
-
-shopInfoBtn.onclick = () => { shopHelpOverlay.classList.remove('hidden'); };
-closeHelpBtn.onclick = () => { shopHelpOverlay.classList.add('hidden'); };
+// --- Información de objetos (sustituye a la antigua tienda) ---
+const itemsModal = document.getElementById('items-modal');
+const closeItemsBtn = document.getElementById('close-items-btn');
+let itemsWasPlaying = false;
+if (infoFab) infoFab.addEventListener('click', () => {
+    itemsWasPlaying = gameActive;
+    gameActive = false;
+    itemsModal.classList.remove('hidden');
+});
+if (closeItemsBtn) closeItemsBtn.addEventListener('click', () => {
+    itemsModal.classList.add('hidden');
+    if (itemsWasPlaying) gameActive = true;
+    itemsWasPlaying = false;
+});
 
 window.addEventListener('keydown', (e) => {
     if (e.key === '1') game.useItem(0);

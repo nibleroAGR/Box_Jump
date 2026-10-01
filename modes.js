@@ -297,6 +297,7 @@
             case 'drone': return { x: x - 20, y: y - 10, w: 40, h: 20 };
             case 'hole': return { x: x - it.w, y: y - it.w, w: it.w * 2, h: it.w * 2 };
             case 'box': return { x: x - it.w / 2, y: y - it.w / 2, w: it.w, h: it.w };
+            case 'chest': return { x: x - 13, y: y - 20, w: 26, h: 20 };
             default: return { x: x - 12, y: y - 12, w: 24, h: 24 };
         }
     }
@@ -380,7 +381,7 @@
         { id: 'none', label: '✋ Mover' },
         ...PTYPES.map((t) => ({ id: 'plat:' + t[0], label: '▬ ' + t[1], k: 'plat', t: t[0] })),
         { id: 'drone', label: '🛸 Dron', k: 'drone' }, { id: 'shield', label: '🛡 Escudo', k: 'shield' },
-        { id: 'dj', label: '⏫ Doble salto', k: 'dj' }, { id: 'hole', label: '🌀 Agujero', k: 'hole' }, { id: 'box', label: '📦 Caja', k: 'box' },
+        { id: 'dj', label: '⏫ Doble salto', k: 'dj' }, { id: 'hole', label: '🌀 Agujero', k: 'hole' }, { id: 'box', label: '📦 Caja', k: 'box' }, { id: 'chest', label: '🎁 Cofre', k: 'chest' },
     ];
     function buildPalette() {
         const box = $('ed-palette');
@@ -404,7 +405,7 @@
         const it = ED.sel != null ? l.items[ED.sel] : null;
         if (!it) { hide(box); return; }
         show(box);
-        const names = { plat: 'Plataforma', drone: 'Dron', shield: 'Escudo', dj: 'Doble salto', hole: 'Agujero negro', box: 'Caja' };
+        const names = { plat: 'Plataforma', drone: 'Dron', shield: 'Escudo', dj: 'Doble salto', hole: 'Agujero negro', box: 'Caja', chest: 'Cofre' };
         const goal = it.k === 'plat' && ED.sel === topIdx(l);
         let h = `<b>${names[it.k]}${goal ? ' · 🏁 META' : ''}</b>`;
         if (it.k === 'plat') {
@@ -489,6 +490,10 @@
             c.fillStyle = g; c.beginPath(); c.arc(cx, cy, it.w, 0, Math.PI * 2); c.fill();
         } else if (it.k === 'box') {
             c.fillStyle = 'hsl(215,80%,60%)'; c.fillRect(b.x, b.y, b.w, b.h);
+        } else if (it.k === 'chest') {
+            c.fillStyle = '#8a5a2b'; c.fillRect(b.x, b.y + 8, b.w, 12);
+            c.fillStyle = '#b07a3a'; c.fillRect(b.x - 1, b.y, b.w + 2, 9);
+            c.fillStyle = '#ffd700'; c.fillRect(cx - 3, b.y + 5, 6, 7);
         } else {
             c.fillStyle = it.k === 'shield' ? '#00ff64' : '#ff00ea';
             c.beginPath(); c.arc(cx, cy, 10, 0, Math.PI * 2); c.fill();
@@ -532,10 +537,23 @@
         ED.drag = null;
         const p = ptr(e), l = lvl();
         if (d.idx >= 0) {
+            const it = l.items[d.idx];
             if (d.moved) {
-                const it = l.items[d.idx], err = posError(it, d.idx);
-                if (err) { it.fx = d.orig.fx; it.y = d.orig.y; toast(err); requestDraw(); }
-                else changed();
+                if (it.k === 'chest') { // el cofre siempre se queda sobre la plataforma más cercana en altura
+                    const ps = platsOf(l);
+                    if (!ps.length) { it.fx = d.orig.fx; it.y = d.orig.y; toast('El cofre necesita una plataforma'); requestDraw(); }
+                    else { it.y = ps.reduce((bst, q) => (Math.abs(q.y - it.y) < Math.abs(bst.y - it.y) ? q : bst)).y; changed(); }
+                } else {
+                    const err = posError(it, d.idx);
+                    if (err) { it.fx = d.orig.fx; it.y = d.orig.y; toast(err); requestDraw(); }
+                    else changed();
+                }
+            } else if (ED.pal && ED.pal.k === 'chest' && it.k === 'plat') {
+                if (l.items.filter((i) => i.k === 'chest').length >= 3) toast('Máximo 3 cofres por nivel');
+                else {
+                    l.items.push({ k: 'chest', fx: fxOf(p.x, 0), y: it.y });
+                    ED.sel = l.items.length - 1; selUI(); changed();
+                }
             }
         } else if (!d.moved && ED.pal) {
             addAt(p);
@@ -549,6 +567,7 @@
         const l = lvl(), pal = ED.pal;
         if (l.items.length >= MAX_ITEMS) { toast(`Máximo ${MAX_ITEMS} elementos por nivel`); return; }
         let it;
+        if (pal.k === 'chest') { toast('Toca sobre una plataforma para poner el cofre'); return; }
         if (pal.k === 'plat') {
             if (platsOf(l).length >= MAX_PLATS) { toast(`Máximo ${MAX_PLATS} plataformas por nivel`); return; }
             const w = 90;

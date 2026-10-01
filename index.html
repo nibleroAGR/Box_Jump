@@ -6,7 +6,7 @@
     <meta name="viewport"
         content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
     <title>Box Jump Precision</title>
-    <link rel="stylesheet" href="style.css?v=15">
+    <link rel="stylesheet" href="style.css?v=16">
 </head>
 
 <body>
@@ -24,9 +24,9 @@
                             <span></span><span></span><span></span>
                         </div>
                         <div id="menu-panel" class="hidden">
-                            <div id="shop-fab" title="Tienda">🛒</div>
                             <div id="ranking-fab" class="hidden" title="Clasificación">🏆</div>
                             <div id="settings-fab" title="Configuración">⚙️</div>
+                            <div id="info-fab" title="Objetos">ℹ️</div>
                             <div id="home-fab" title="Menú principal">🏠</div>
                         </div>
                     </div>
@@ -93,54 +93,23 @@
             <div id="msg-overlay" class="hidden">
                 <h2 id="msg-text">EXCELENTE</h2>
             </div>
-            <div id="shop-modal" class="screen hidden">
-                <div class="glass-card shop-card">
-                    <div id="shop-info-btn">ℹ️</div>
-                    <h2>TIENDA</h2>
-                    <p>Mejora tus habilidades</p>
-                    <div class="shop-grid">
-                        <div class="shop-item" onclick="game.buyItem('clock')">
-                            <span class="item-icon">⏱️</span>
-                            <span class="item-name">Reloj</span>
-                            <span class="item-price">1000 pts</span>
-                        </div>
-                        <div class="shop-item" onclick="game.buyItem('platform')">
-                            <span class="item-icon">🏗️</span>
-                            <span class="item-name">Plataforma</span>
-                            <span class="item-price">1000 pts</span>
-                        </div>
-                        <div class="shop-item" onclick="game.buyItem('power')">
-                            <span class="item-icon">⚡</span>
-                            <span class="item-name">Power</span>
-                            <span class="item-price">1000 pts</span>
-                        </div>
-                        <div class="shop-item" onclick="game.buyItem('bomb')">
-                            <span class="item-icon">💣</span>
-                            <span class="item-name">Bomba</span>
-                            <span class="item-price">1000 pts</span>
-                        </div>
+            <div id="items-modal" class="screen hidden">
+                <div class="glass-card items-card">
+                    <h3>🎁 COFRES Y OBJETOS</h3>
+                    <div class="help-item">
+                        <strong>🎁 Cofres</strong>
+                        Aterriza en una plataforma con cofre: se abre y una tragaperras rellena tus huecos libres (máx. 3 objetos).
                     </div>
-                    <button id="close-shop-btn">CERRAR</button>
-
-                    <!-- Overlay de Ayuda dentro de la Tienda -->
-                    <div id="shop-help-overlay" class="hidden">
-                        <div class="glass-card help-card">
-                            <h3>INFORMACIÓN DE OBJETOS</h3>
-                            <div class="help-item">
-                                <strong>⏱️ Reloj:</strong> Ralentiza la bola a la mitad por 10s.
-                            </div>
-                            <div class="help-item">
-                                <strong>🏗️ Plataforma:</strong> Crea un puente de ancho total bajo tus pies.
-                            </div>
-                            <div class="help-item">
-                                <strong>⚡ Power:</strong> Zona verde PERFECT x5 durante 5 turnos.
-                            </div>
-                            <div class="help-item">
-                                <strong>💣 Bomba:</strong> Pausa el juego para explotar una plataforma a elegir.
-                            </div>
-                            <button id="close-help-btn">ENTENDIDO</button>
-                        </div>
+                    <div class="help-item">
+                        <strong>💰 Coste</strong>
+                        Usar un objeto (tocándolo) cuesta 1000 pts. Puedes quedarte en negativo hasta -2000.
                     </div>
+                    <div class="help-item"><strong>⏱️ Reloj:</strong> Ralentiza la bola a la mitad por 10s.</div>
+                    <div class="help-item"><strong>🏗️ Plataforma:</strong> Crea un puente de ancho total bajo tus pies.</div>
+                    <div class="help-item"><strong>⚡ Power:</strong> Zona verde PERFECT x5 durante 5 turnos.</div>
+                    <div class="help-item"><strong>💣 Bomba:</strong> Pausa el juego para explotar una plataforma a elegir.</div>
+                    <div class="help-item"><strong>🧪 Pegajosa:</strong> Durante 3 turnos la caja (con mancha verde en la base) se queda pegada a la plataforma donde aterrice, sea cual sea la inercia, la fuerza del salto o el tipo de plataforma.</div>
+                    <button id="close-items-btn">ENTENDIDO</button>
                 </div>
             </div>
             <div id="start-screen" class="screen">
@@ -250,7 +219,7 @@
             </div>
         </div>
 
-        <script src="game.js?v=16"></script>
+        <script src="game.js?v=17"></script>
 
         <!-- SDK "compat" de Firebase: archivos únicos clásicos, sin import/export
              encadenados, para máxima compatibilidad entre navegadores/dispositivos. -->
@@ -258,7 +227,7 @@
         <script src="https://www.gstatic.com/firebasejs/10.13.2/firebase-auth-compat.js"></script>
         <script src="https://www.gstatic.com/firebasejs/10.13.2/firebase-firestore-compat.js"></script>
         <script src="backend.js?v=7"></script>
-        <script src="modes.js?v=1"></script>
+        <script src="modes.js?v=2"></script>
     </div>
 </body>
 
