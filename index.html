@@ -6,7 +6,7 @@
     <meta name="viewport"
         content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
     <title>Box Jump Precision</title>
-    <link rel="stylesheet" href="style.css?v=16">
+    <link rel="stylesheet" href="style.css?v=17">
 </head>
 
 <body>
@@ -108,7 +108,22 @@
                     <div class="help-item"><strong>🏗️ Plataforma:</strong> Crea un puente de ancho total bajo tus pies.</div>
                     <div class="help-item"><strong>⚡ Power:</strong> Zona verde PERFECT x5 durante 5 turnos.</div>
                     <div class="help-item"><strong>💣 Bomba:</strong> Pausa el juego para explotar una plataforma a elegir.</div>
-                    <div class="help-item"><strong>🧪 Pegajosa:</strong> Durante 3 turnos la caja (con mancha verde en la base) se queda pegada a la plataforma donde aterrice, sea cual sea la inercia, la fuerza del salto o el tipo de plataforma.</div>
+                    <div class="help-item">
+                        <strong>📦 Cajas (se eligen en el menú principal)</strong>
+                        🔩 <b>Pesada</b> ignora el viento · 🪶 <b>Ligera</b> planea (cae despacio, el viento la empuja más) · 🟣 <b>Goma</b> rebota al caer y en las paredes · 🟢 <b>Pegajosa</b> se pega a la plataforma donde aterriza · 💣 <b>Bomba</b>: 20 s en cada nivel para llegar a la meta o explota.
+                    </div>
+                    <div class="help-item">
+                        <strong>🌋 Lava (cada 10 niveles)</strong>
+                        La lava sube cada vez que dejas pasar la bola sin pulsar. Puedes fallar 3 veces; a la cuarta te alcanza.
+                    </div>
+                    <div class="help-item">
+                        <strong>🆘 Rescate</strong>
+                        Si caes sin plataforma debajo, el tiempo se frena: pulsa 3 botones seguidos justo cuando el aro grande encaje con el círculo. Una vez por nivel.
+                    </div>
+                    <div class="help-item">
+                        <strong>🪦 Lápidas</strong>
+                        En la fase diaria y las de la comunidad, una lápida marca la plataforma donde más gente ha caído en cada nivel.
+                    </div>
                     <button id="close-items-btn">ENTENDIDO</button>
                 </div>
             </div>
@@ -132,6 +147,11 @@
                         <div id="username-edit-row" class="hidden">
                             <input id="username-input" type="text" maxlength="20" placeholder="Nombre de usuario" />
                             <button id="save-username-btn">✔</button>
+                        </div>
+                        <div id="box-picker">
+                            <p class="box-picker-title">TU CAJA</p>
+                            <div id="box-options"></div>
+                            <p id="box-desc" class="settings-help"></p>
                         </div>
                         <div id="menu-buttons">
                             <button id="new-game-btn" class="menu-btn">1 · 🎮 NUEVA PARTIDA</button>
@@ -219,15 +239,15 @@
             </div>
         </div>
 
-        <script src="game.js?v=18"></script>
+        <script src="game.js?v=19"></script>
 
         <!-- SDK "compat" de Firebase: archivos únicos clásicos, sin import/export
              encadenados, para máxima compatibilidad entre navegadores/dispositivos. -->
         <script src="https://www.gstatic.com/firebasejs/10.13.2/firebase-app-compat.js"></script>
         <script src="https://www.gstatic.com/firebasejs/10.13.2/firebase-auth-compat.js"></script>
         <script src="https://www.gstatic.com/firebasejs/10.13.2/firebase-firestore-compat.js"></script>
-        <script src="backend.js?v=8"></script>
-        <script src="modes.js?v=3"></script>
+        <script src="backend.js?v=9"></script>
+        <script src="modes.js?v=4"></script>
     </div>
 </body>
 

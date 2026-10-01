@@ -127,6 +127,7 @@ function buildCustomLevel() {
     plats.forEach((it, i) => {
         const goal = i === plats.length - 1, w = it.w || 90;
         platforms.push(new Platform(mapX(it.fx, w, width, precisionSystem.side), baseY - it.y, w, 20, goal, goal ? 'normal' : (it.t || 'normal')));
+        platforms[platforms.length - 1].idx = platforms.length - 1;
         totalPlatformGlobalCount++;
     });
     d.items.forEach(it => {
@@ -145,8 +146,9 @@ function buildCustomLevel() {
     });
 }
 function populateLevel() {
-    if (gameMode === 'custom') { buildCustomLevel(); return; }
-    for (let i = 1; i < platformsInLevel; i++) spawnNextPlatform(i === platformsInLevel - 1);
+    if (gameMode === 'custom') buildCustomLevel();
+    else for (let i = 1; i < platformsInLevel; i++) spawnNextPlatform(i === platformsInLevel - 1);
+    placeTombstone();
 }
 
 function updateStartScreenUI() {
@@ -224,14 +226,152 @@ let clockTimeoutId = null;
 let greenPowerActive = 0;
 let platformItemActive = false;
 let bombActive = false;
-let stickyTurns = 0;      // turnos restantes de "caja pegajosa"
+// ===================== CAJAS CON PERSONALIDAD =====================
+// La caja del jugador se elige en el menú principal (se guarda en este navegador).
+const BOX_TYPES = {
+    normal: { name: 'Clásica',  wind: 1,   grav: 1,   desc: 'Equilibrada y sin trucos.' },
+    heavy:  { name: 'Pesada',   wind: 0,   grav: 1,   desc: 'Ignora el viento por completo.' },
+    light:  { name: 'Ligera',   wind: 1.3, grav: 0.6, desc: 'Planea: cae muy despacio, pero el viento la empuja más.' },
+    rubber: { name: 'Goma',     wind: 1,   grav: 1,   desc: 'Rebota al caer y contra las paredes.' },
+    sticky: { name: 'Pegajosa', wind: 1,   grav: 1,   desc: 'Se pega a la plataforma donde aterriza, sea cual sea la inercia o el tipo de plataforma.' },
+    bomb:   { name: 'Bomba',    wind: 1,   grav: 1,   desc: 'Al empezar cada nivel tienes 20 s para llegar a la meta y desactivarla.' },
+};
+const BOMB_FUSE_SECONDS = 20;
+let boxType = 'normal';
+try { const bt = localStorage.getItem('boxjump_box_type'); if (bt && BOX_TYPES[bt]) boxType = bt; } catch (e) { /* no disponible */ }
+let bombFuse = BOMB_FUSE_SECONDS;
+let lastUpdateT = performance.now();
+const boxCfg = () => BOX_TYPES[boxType];
+const effWind = () => windForce * boxCfg().wind;          // viento que de verdad afecta a esta caja
+const effGrav = () => player.gravity * boxCfg().grav;     // gravedad propia de esta caja
+const armBomb = () => { bombFuse = BOMB_FUSE_SECONDS; };
+
+function roundRectPath(c, x, y, w, h, r) {
+    c.beginPath();
+    c.moveTo(x + r, y); c.arcTo(x + w, y, x + w, y + h, r); c.arcTo(x + w, y + h, x, y + h, r);
+    c.arcTo(x, y + h, x, y, r); c.arcTo(x, y, x + w, y, r); c.closePath();
+}
+// Dibuja una caja centrada en (0,0). Cada tipo tiene su propio aspecto.
+function drawBoxShape(c, type, w, h, t, o = {}) {
+    const x = -w / 2, y = -h / 2;
+    c.save();
+    switch (type) {
+        case 'heavy': { // acero remachado con placa "KG"
+            c.shadowBlur = 14; c.shadowColor = '#9fb4d0';
+            const g = c.createLinearGradient(0, y, 0, y + h);
+            g.addColorStop(0, '#9aabc2'); g.addColorStop(1, '#3d4a5c');
+            c.fillStyle = g; c.fillRect(x, y, w, h);
+            c.shadowBlur = 0;
+            c.strokeStyle = '#1b2430'; c.lineWidth = 4; c.strokeRect(x + 2, y + 2, w - 4, h - 4);
+            c.strokeStyle = 'rgba(255,255,255,0.35)'; c.lineWidth = 1; c.strokeRect(x + 5.5, y + 5.5, w - 11, h - 11);
+            c.fillStyle = '#e1e8f2';
+            [[x + 3, y + 3], [x + w - 7, y + 3], [x + 3, y + h - 7], [x + w - 7, y + h - 7]].forEach(([rx, ry]) => c.fillRect(rx, ry, 4, 4));
+            c.fillStyle = '#10161f'; c.font = `bold ${Math.max(7, Math.round(h * 0.3))}px Arial`;
+            c.textAlign = 'center'; c.textBaseline = 'middle'; c.fillText('KG', 0, 1);
+            break;
+        }
+        case 'light': { // translúcida, con alitas que aletean
+            const flap = Math.sin(t * 0.014) * 0.45;
+            c.shadowBlur = 12; c.shadowColor = '#bfe9ff';
+            c.fillStyle = 'rgba(255,255,255,0.8)';
+            [-1, 1].forEach((s) => {
+                c.save(); c.translate(s * w / 2, -h * 0.12); c.rotate(s * (-0.55 + flap));
+                c.beginPath(); c.ellipse(s * 9, 0, 11, 4.5, 0, 0, Math.PI * 2); c.fill(); c.restore();
+            });
+            c.fillStyle = 'rgba(214,240,255,0.88)'; c.fillRect(x, y, w, h);
+            c.shadowBlur = 0;
+            c.strokeStyle = 'rgba(255,255,255,0.95)'; c.lineWidth = 1.5; c.strokeRect(x + 2, y + 2, w - 4, h - 4);
+            c.fillStyle = 'rgba(120,190,230,0.55)';
+            c.fillRect(x + w * 0.22, y + h * 0.32, w * 0.56, 2); c.fillRect(x + w * 0.3, y + h * 0.5, w * 0.4, 2); c.fillRect(x + w * 0.38, y + h * 0.68, w * 0.24, 2);
+            break;
+        }
+        case 'rubber': { // goma rosa con brillo
+            c.shadowBlur = 14; c.shadowColor = '#ff4f9a';
+            c.fillStyle = '#ff4f9a'; roundRectPath(c, x, y, w, h, Math.min(11, w * 0.36)); c.fill();
+            c.shadowBlur = 0;
+            c.strokeStyle = 'rgba(130,0,70,0.55)'; c.lineWidth = 2; roundRectPath(c, x + 1, y + 1, w - 2, h - 2, Math.min(10, w * 0.34)); c.stroke();
+            c.fillStyle = 'rgba(255,255,255,0.5)'; roundRectPath(c, x + 4, y + 4, w * 0.46, h * 0.2, 4); c.fill();
+            break;
+        }
+        case 'sticky': { // verde con goterones que cuelgan
+            c.shadowBlur = 12; c.shadowColor = '#00ff64';
+            c.fillStyle = '#2ecf6a'; c.fillRect(x, y, w, h);
+            c.shadowBlur = 0;
+            c.strokeStyle = 'rgba(255,255,255,0.45)'; c.lineWidth = 1.5; c.strokeRect(x + 2, y + 2, w - 4, h - 4);
+            c.fillStyle = '#00ff64'; c.fillRect(x, y + h - 6, w, 6);
+            const d = (Math.sin(t * 0.004) + 1) / 2;
+            [[-w / 4, 3 + d * 3], [w / 5, 2.5 + (1 - d) * 3], [w * 0.38, 2 + d * 2]].forEach(([dx, len]) => {
+                c.fillRect(dx - 1.2, y + h - 1, 2.4, len); c.beginPath(); c.arc(dx, y + h + len - 1, 2.6, 0, Math.PI * 2); c.fill();
+            });
+            break;
+        }
+        case 'bomb': { // negra con franja roja, mecha encendida
+            c.shadowBlur = 10; c.shadowColor = '#ff3b2f';
+            c.fillStyle = '#1a1a22'; c.fillRect(x, y, w, h);
+            c.shadowBlur = 0;
+            c.strokeStyle = '#ff3b2f'; c.lineWidth = 2; c.strokeRect(x + 2, y + 2, w - 4, h - 4);
+            c.fillStyle = '#ff3b2f'; c.fillRect(x, y + h * 0.42, w, h * 0.16);
+            c.strokeStyle = '#caa46a'; c.lineWidth = 2; c.beginPath(); c.moveTo(0, y); c.quadraticCurveTo(5, y - 6, 2, y - 10); c.stroke();
+            const urgent = o.fuse !== undefined && o.fuse < 5;
+            if (!urgent || Math.floor(t / 110) % 2 === 0) {
+                c.fillStyle = Math.floor(t / 90) % 2 ? '#ffe08a' : '#ff9a1f';
+                c.shadowBlur = 14; c.shadowColor = '#ff9a1f';
+                c.beginPath(); c.arc(2, y - 10, 3.2 + Math.sin(t * 0.03), 0, Math.PI * 2); c.fill();
+            }
+            break;
+        }
+        default: { // clásica
+            c.shadowBlur = 15; c.shadowColor = THEME.player; c.fillStyle = THEME.player;
+            c.fillRect(x, y, w, h);
+            c.shadowBlur = 0;
+            c.strokeStyle = 'rgba(255,255,255,0.5)'; c.lineWidth = 1.5; c.strokeRect(x + 2, y + 2, w - 4, h - 4);
+        }
+    }
+    c.restore();
+}
+
+// ===================== LAVA ASCENDENTE (cada 10 niveles) =====================
+const LAVA_EVERY = 10;      // un nivel de lava cada N niveles
+const LAVA_MAX_SKIPS = 3;   // pasadas de la bola que puedes dejar sin pulsar; la siguiente te alcanza la lava
+const lava = { active: false, y: 0, targetY: 0, skips: 0, doom: false, armed: false, t: 0 };
+
+// ===================== LÁPIDAS (muertes de otros jugadores) =====================
+let tombstones = [];
+let lastPlatIdx = 0;                 // índice (dentro del nivel) de la última plataforma pisada
+const usedTombPhrases = new Set();
+const TOMB_PHRASES = [
+    'Dijo «ya lo tengo» justo antes de saltar.',
+    'Pulsó un pelín tarde. Un pelín.',
+    'La gravedad siempre gana.',
+    'Descansa en piezas.',
+    'Era el salto fácil, decían.',
+    'Aquí perdió la fe en la zona verde.',
+    'Murió como vivió: apuntando mal.',
+    'Se oyó un «¡ay!» larguísimo.',
+    'Eligió la plataforma equivocada.',
+    'Nunca más confiará en el viento.',
+    'F por los que cayeron aquí.',
+    'Vio la plataforma. La plataforma no lo vio a él.',
+    'Aquí yace un combo de x9.',
+    'Casi. Casi casi.',
+    'Su último pensamiento: «¿y si pulso ya?»',
+];
+
+// ===================== RESCATE EN EL ÚLTIMO SEGUNDO =====================
+const RESCUE_STEPS = 3;            // botones seguidos
+const RESCUE_TIME = 3000;          // ms que tarda el aro en cerrarse en cada botón
+const RESCUE_TARGET_R = 30;        // radio del círculo fijo
+const RESCUE_START_R = 112;        // radio inicial del aro que se achica
+const RESCUE_TOL = [12, 10, 8];    // margen de acierto (px) en cada botón: cada vez más exigente
+const RESCUE_TRIGGER = 0.74;       // la caja debe haber caído por debajo de este % de pantalla
+const rescue = { active: false, usedThisLevel: false, phase: 'idle', step: 0, elapsed: 0, btn: null, prev: null, target: null, rise: null };
 let chests = [];          // cofres sobre plataformas
 let reels = [];           // rodillos de la tragaperras pendientes de parar
 let reelTimer = null;
 
 // Cofres y objetos
-const ITEM_POOL = ['clock', 'platform', 'power', 'bomb', 'sticky'];
-const ITEM_ICONS = { clock: '⏱️', platform: '🏗️', power: '⚡', bomb: '💣', sticky: '🧪' };
+const ITEM_POOL = ['clock', 'platform', 'power', 'bomb'];
+const ITEM_ICONS = { clock: '⏱️', platform: '🏗️', power: '⚡', bomb: '💣' };
 const MAX_INV = 3;
 const CHEST_CHANCE = 0.12; // probabilidad de cofre por plataforma
 
@@ -249,12 +389,15 @@ const player = {
     onGround: false,
     color: THEME.player,
     currentPlatform: null,
+    bouncesLeft: 2,   // rebotes que le quedan a la caja de goma
+    squash: 0,        // aplastamiento visual (goma)
 
     update() {
-        // Viento si no está en el suelo
+        if (this.squash > 0) this.squash = Math.max(0, this.squash - 0.07);
+        // Viento si no está en el suelo (la caja pesada lo ignora, la ligera lo nota más)
         if (!this.onGround) {
-            if (!this.straightBounce) this.vx += windForce;
-            this.vy += this.gravity * gravityFactor;
+            if (!this.straightBounce) this.vx += effWind();
+            this.vy += effGrav() * gravityFactor;
             this.rotation += this.angularVelocity;
         } else {
             this.vy = 0;
@@ -263,6 +406,7 @@ const player = {
             let friction = 0.85;
             if (this.currentPlatform && this.currentPlatform.type === 'ice') friction = 0.98;
             if (this.currentPlatform && (this.currentPlatform.type === 'sticky' || this.currentPlatform.type === 'mini_sticky')) friction = 0;
+            if (boxType === 'sticky') friction = 0; // la caja pegajosa se queda clavada donde cae
 
             this.vx *= friction;
             this.rotation = 0;
@@ -294,8 +438,8 @@ const player = {
         this.x += this.vx;
         this.y += this.vy;
 
-        if (this.x < 0) this.x = 0;
-        if (this.x + this.w > width) this.x = width - this.w;
+        if (this.x < 0) { this.x = 0; if (boxType === 'rubber' && !this.onGround) this.vx = Math.abs(this.vx) * 0.85; }
+        if (this.x + this.w > width) { this.x = width - this.w; if (boxType === 'rubber' && !this.onGround) this.vx = -Math.abs(this.vx) * 0.85; }
 
         if (this.y > height) {
             if (hasShield) {
@@ -310,19 +454,13 @@ const player = {
         ctx.save();
         ctx.translate(this.x + this.w / 2, this.y + this.h / 2);
         ctx.rotate(this.rotation);
-        ctx.shadowBlur = 15;
-        ctx.shadowColor = this.color;
-        ctx.fillStyle = this.color;
-        ctx.fillRect(-this.w / 2, -this.h / 2, this.w, this.h);
-        ctx.strokeStyle = 'rgba(255,255,255,0.5)';
-        ctx.strokeRect(-this.w / 2 + 2, -this.h / 2 + 2, this.w - 4, this.h - 4);
-        if (stickyTurns > 0) { // mancha verde horizontal en la base
-            ctx.shadowBlur = 12; ctx.shadowColor = '#00ff64';
-            ctx.fillStyle = '#00ff64';
-            ctx.fillRect(-this.w / 2, this.h / 2 - 6, this.w, 6);
-            ctx.beginPath(); ctx.arc(-this.w / 4, this.h / 2, 3, 0, Math.PI * 2); ctx.fill();
-            ctx.beginPath(); ctx.arc(this.w / 5, this.h / 2 + 1, 2.5, 0, Math.PI * 2); ctx.fill();
+        if (boxType === 'rubber') { // la goma se aplasta al caer y se estira al moverse rápido
+            const stretch = this.onGround ? 0 : Math.min(0.25, Math.abs(this.vy) * 0.012);
+            const sy = 1 - 0.35 * this.squash + stretch, sx = 1 + 0.3 * this.squash - stretch * 0.6;
+            ctx.translate(0, (this.h / 2) * (1 - sy));
+            ctx.scale(sx, sy);
         }
+        drawBoxShape(ctx, boxType, this.w, this.h, performance.now(), { fuse: bombFuse });
         ctx.restore();
     }
 };
@@ -348,6 +486,7 @@ const precisionSystem = {
         this.ball.x = this.canal.x + this.canal.w / 2;
         this.ball.y = -50;
         this.ball.active = true;
+        if (lava.active) lava.armed = true; // en el nivel de lava, a partir de esta bola cuentan las pasadas
 
         const candidates = platforms.filter(p => p.y < player.y).sort((a, b) => b.y - a.y);
         let difficultyFactor = 1;
@@ -371,6 +510,7 @@ const precisionSystem = {
         this.ball.y += this.ball.speed * ballSpeedFactor;
         if (this.ball.y > height + this.ball.radius) {
             this.ball.active = false;
+            lavaSkip(); // la bola ha pasado sin que pulsaras
             this.spawnBall();
         }
     },
@@ -548,6 +688,7 @@ class Platform {
         this.pauseTimer = 0;
         this.oscOffset = 0;
         this.isVisible = true;
+        this.idx = -1; // orden dentro del nivel (0 = plataforma de salida); sirve para las lápidas
 
         if (type === 'mini_sticky') this.w *= 0.6;
     }
@@ -856,7 +997,7 @@ function initPlatforms(startLevel = 1) {
     platformsReached = 0; totalPlatformGlobalCount = 0;
     combo = 0; rollEnvironment(false);
     hasShield = false; canDoubleJump = false; doubleJumpUsed = false;
-    cancelReels(); inventory = []; chests = []; stickyTurns = 0; updateInventoryUI();
+    cancelReels(); inventory = []; chests = []; tombstones = []; usedTombPhrases.clear(); lastPlatIdx = 0; resetRescue(); armBomb(); updateInventoryUI();
     ballSpeedFactor = 1.0; greenPowerActive = 0; platformItemActive = false; bombActive = false;
     if (clockTimeoutId) { clearTimeout(clockTimeoutId); clockTimeoutId = null; }
 
@@ -866,6 +1007,7 @@ function initPlatforms(startLevel = 1) {
 
     const startCx = width / 2 + (precisionSystem.side === 'left' ? 30 : 0);
     platforms.push(new Platform(startCx - 50, height - 150, 100, 20));
+    platforms[0].idx = 0;
     resetLevelHeight();
     player.x = startCx - player.w / 2;
     player.y = height - 150 - player.h;
@@ -875,6 +1017,8 @@ function initPlatforms(startLevel = 1) {
     player.angularVelocity = 0;
     player.onGround = true;
     player.currentPlatform = platforms[0];
+    player.bouncesLeft = 2; player.squash = 0;
+    setupLava(false);
     populateLevel();
 }
 
@@ -906,6 +1050,7 @@ function spawnNextPlatform(forceGoal = false) {
 
     const platform = new Platform(nextX, nextY, nextW, 20, forceGoal, type, rDirX > 0.5, rDirY > 0.5);
     platforms.push(platform);
+    platform.idx = platforms.length - 1;
 
     // Cofre (se abre al aterrizar en esta plataforma)
     if (!forceGoal && type !== 'flash' && rChest < CHEST_CHANCE) chests.push(new Chest(platform, 0.12 + rChestT * 0.76));
@@ -942,7 +1087,10 @@ function nextLevel() {
 
     platformsInLevel = levelPlatformCount();
     platformsReached = 0;
-    showFeedback("¡NIVEL " + hudLevel() + "!" + (windForce !== 0 ? "\n¡CUIDADO CON EL VIENTO!" : "") + (gravityFactor < 1 ? "\n¡GRAVEDAD BAJA!" : ""));
+    const lavaNext = isLavaLevel();
+    showFeedback("¡NIVEL " + hudLevel() + "!" + (windForce !== 0 ? "\n¡CUIDADO CON EL VIENTO!" : "") + (gravityFactor < 1 ? "\n¡GRAVEDAD BAJA!" : "") +
+        (lavaNext ? "\n🌋 ¡LAVA! Pulsa en CADA pasada de la bola (máx. " + LAVA_MAX_SKIPS + " fallos)" : "") +
+        (boxType === 'bomb' ? "\n💣 Bomba desactivada. Rearmada: " + BOMB_FUSE_SECONDS + " s" : ""));
 
     // Guardado automático cada 5 niveles (checkpoint) — solo en la partida normal
     if (gameMode === 'normal' && level % 5 === 0 && window.BJFirebase && window.BJFirebase.isSignedIn()) {
@@ -953,6 +1101,8 @@ function nextLevel() {
 
     const current = player.currentPlatform;
     platforms = [current];
+    current.idx = 0; lastPlatIdx = 0; tombstones = [];
+    rescue.usedThisLevel = false; armBomb(); setupLava(true);
     resetLevelHeight();
     props = [];
     obstacles = [];
@@ -1004,12 +1154,13 @@ function computeJump(precision) {
     const distY = player.y - target.y + player.h;
 
     const targetMultiplier = (tier === "PERFECT") ? 1.08 : (tier === "GOOD" ? 1.45 : (Math.random() > 0.5 ? 2.0 : 0.4));
-    const vy = -Math.sqrt(2 * player.gravity * distY) * targetMultiplier;
+    const g = effGrav(); // gravedad propia de la caja (la ligera cae más despacio)
+    const vy = -Math.sqrt(2 * g * distY) * targetMultiplier;
 
-    const tRise = Math.abs(vy / player.gravity);
-    const hMax = (vy * vy) / (2 * player.gravity);
+    const tRise = Math.abs(vy / g);
+    const hMax = (vy * vy) / (2 * g);
     const hFall = hMax - distY;
-    const tFall = Math.sqrt(Math.max(0, 2 * hFall / player.gravity));
+    const tFall = Math.sqrt(Math.max(0, 2 * hFall / g));
     const totalT = tRise + tFall;
 
     const dx = (target.x + target.w / 2) - (player.x + player.w / 2);
@@ -1020,6 +1171,7 @@ function launchPlayer(j, vx) {
     player.vy = j.vy;
     player.vx = vx;
     player.onGround = false;
+    player.bouncesLeft = 2;
     player.angularVelocity = (j.tier === "PERFECT" ? 0.15 : (j.tier === "GOOD" ? 0.35 : 0.6));
 }
 
@@ -1036,11 +1188,11 @@ function simulateJump(j, vx0) {
     let tTarget = null, landing = null;
     for (let step = 1; step <= 500; step++) {
         const prevBottom = y + player.h;
-        vx += windForce;
-        vy += player.gravity * gravityFactor;
+        vx += effWind();
+        vy += effGrav() * gravityFactor;
         x += vx; y += vy;
-        if (x < 0) x = 0;
-        if (x + player.w > width) x = width - player.w;
+        if (x < 0) { x = 0; if (boxType === 'rubber') vx = Math.abs(vx) * 0.85; }
+        if (x + player.w > width) { x = width - player.w; if (boxType === 'rubber') vx = -Math.abs(vx) * 0.85; }
         const bottom = y + player.h;
 
         if (vy >= 0 && tTarget === null && prevBottom < j.target.y && bottom >= j.target.y) tTarget = step;
@@ -1079,7 +1231,7 @@ const aim = {
         // Rango lateral: cubre con margen (x1.6) lo necesario para anular el viento máximo
         // y como mínimo ~2.2x la semi-ventana de acierto, para que el ajuste exija precisión
         const hitHalfVx = ((j.target.w + player.w) / 2) / T;
-        this.range = Math.max(0.8, 0.5 * Math.abs(windForce) * T * 1.6, hitHalfVx * 2.2);
+        this.range = Math.max(0.8, 0.5 * Math.abs(effWind()) * T * 1.6, hitHalfVx * 2.2);
         this.jump = j;
         this.period = Math.max(1.2, 2.0 - (level - 12) * 0.03); // más rápido al subir de nivel
         this.dir = Math.random() < 0.5 ? -1 : 1;
@@ -1221,6 +1373,11 @@ function drawWindHUD() {
         ctx.moveTo(px - dir * 5, y - 7); ctx.lineTo(px + dir * 5, y); ctx.lineTo(px - dir * 5, y + 7);
         ctx.stroke();
     }
+    if (boxCfg().wind === 0) { // caja pesada
+        ctx.shadowBlur = 0; ctx.globalAlpha = 1; ctx.fillStyle = 'rgba(255,255,255,0.6)';
+        ctx.font = 'bold 9px Outfit, Inter, sans-serif';
+        ctx.fillText('🔩 IGNORADO', cx, y + 24);
+    }
     ctx.restore();
 }
 
@@ -1280,22 +1437,35 @@ function checkCollisions() {
             player.y + player.h >= p.y && player.y + player.h <= p.y + p.h + 10) {
 
             // Item Bomba se ha movido a triggerAction para elección manual
+            const impact = player.vy;
             player.y = p.y - player.h;
-            player.onGround = true;
+            let bounced = false;
+            if (boxType === 'rubber' && impact > 6 && player.bouncesLeft > 0) { // caja de goma: rebota (cada vez menos)
+                bounced = true; player.bouncesLeft--;
+                player.vy = -impact * 0.45; player.vx *= 0.25; player.angularVelocity = 0;
+                player.squash = 1;
+                createExplosion(player.x + player.w / 2, p.y, 0.3);
+            } else if (boxType === 'rubber') {
+                player.bouncesLeft = 2;
+                if (impact > 3) player.squash = Math.min(1, impact / 12);
+            }
+            if (boxType === 'heavy' && impact > 8) landingBurst(p, '#9aa7ba', 10); // caja pesada: nube de polvo
+            player.onGround = !bounced;
             if (player.currentPlatform !== p) {
                 // Al aterrizar en plataforma móvil, anular velocidad lateral (Punto 2)
                 if (p.type === 'moving') player.vx = 0;
 
                 player.currentPlatform = p;
+                lastPlatIdx = p.idx;
                 platformsReached++;
                 doubleJumpUsed = false; // Reset salto doble al tocar suelo
                 chests.forEach(c => { if (c.p === p && !c.opened) openChest(c); });
                 // Caja pegajosa: se queda clavada pase lo que pase (inercia, fuerza de salto, tipo de plataforma)
                 let stuck = false;
-                if (stickyTurns > 0) {
-                    stuck = true; stickyTurns--;
+                if (boxType === 'sticky') {
+                    stuck = true;
                     player.vx = 0; player.angularVelocity = 0;
-                    showFeedback(stickyTurns > 0 ? `🟢 ¡PEGADA! (${stickyTurns} más)` : '🟢 ¡PEGADA! (último)');
+                    landingBurst(p, '#00ff64', 8);
                 }
                 if ((p.type === 'vanishing' || p.type === 'fragile') && !p.vanishingStarted) {
                     p.vanishingStarted = true;
@@ -1354,6 +1524,377 @@ function updateParticles() {
     }
 }
 
+// ===================== EFECTOS DE ATERRIZAJE =====================
+function landingBurst(p, color, n) {
+    const cx = player.x + player.w / 2;
+    for (let i = 0; i < n; i++) {
+        particles.push({
+            x: cx + (Math.random() - 0.5) * player.w, y: p.y,
+            vx: (Math.random() - 0.5) * 5, vy: -Math.random() * 2.6,
+            life: 0.9, decay: 0.035 + Math.random() * 0.02, size: 3 + Math.random() * 3, color
+        });
+    }
+}
+
+// ===================== BOMBA: 20 s POR NIVEL =====================
+function updateBombBox(dtSec) {
+    if (boxType !== 'bomb' || runEnded) return;
+    bombFuse -= dtSec;
+    if (bombFuse > 0) return;
+    createExplosion(player.x + player.w / 2, player.y + player.h / 2, 2);
+    if (hasShield) {
+        useShield(); armBomb(); bombFuse = BOMB_FUSE_SECONDS / 2;
+        showFeedback('💥 ¡LA BOMBA ESTALLA!\nEl escudo te salva (10 s más)');
+    } else {
+        showFeedback('💥 ¡BOOM!');
+        endGame();
+    }
+}
+function drawBombRing() {
+    if (boxType !== 'bomb' || runEnded) return;
+    const cx = player.x + player.w / 2, cy = player.y + player.h / 2;
+    const k = Math.max(0, bombFuse / BOMB_FUSE_SECONDS);
+    ctx.save();
+    ctx.lineWidth = 3; ctx.lineCap = 'round';
+    ctx.strokeStyle = bombFuse < 5 ? '#ff3b2f' : '#ffae00';
+    ctx.shadowBlur = 10; ctx.shadowColor = ctx.strokeStyle;
+    ctx.beginPath(); ctx.arc(cx, cy, 28, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * k); ctx.stroke();
+    ctx.restore();
+}
+
+// ===================== LAVA ASCENDENTE =====================
+const isLavaLevel = () => (gameMode === 'normal' || gameMode === 'daily') && level % LAVA_EVERY === 0;
+
+function setupLava(silent) {
+    lava.active = isLavaLevel();
+    lava.skips = 0; lava.doom = false; lava.armed = false;
+    lava.y = lava.targetY = height + 30; // justo bajo la pantalla
+    if (lava.active && !silent) showFeedback('🌋 ¡NIVEL DE LAVA!\nPulsa en CADA pasada de la bola (máx. ' + LAVA_MAX_SKIPS + ' fallos)');
+}
+
+// La bola ha cruzado la barra entera sin que se pulsara: la lava sube.
+// Con skips 1..3 sube una parte del camino que la separa de tu caja; el 4º fallo la deja alcanzarte.
+function lavaSkip() {
+    if (!lava.active || !lava.armed || lava.doom || runEnded) return;
+    lava.skips++;
+    if (lava.skips > LAVA_MAX_SKIPS) {
+        lava.doom = true;
+        showFeedback('🌋 ¡LA LAVA TE ALCANZA!');
+        return;
+    }
+    const feet = player.y + player.h;
+    const stepsLeft = (LAVA_MAX_SKIPS + 1) - (lava.skips - 1);
+    lava.targetY += (feet - lava.targetY) / stepsLeft;
+    showFeedback('🌋 ¡LA LAVA SUBE!\nFallos ' + lava.skips + '/' + LAVA_MAX_SKIPS);
+}
+
+function updateLava() {
+    if (!lava.active || runEnded) return;
+    lava.t += 0.05;
+    if (lava.doom) lava.y -= 11;                           // sube sin freno hasta pillarte
+    else lava.y += (lava.targetY - lava.y) * 0.06;         // sube suave hacia su nuevo nivel
+    if (player.y + player.h > lava.y + 6) {
+        createExplosion(player.x + player.w / 2, player.y + player.h, 1.5);
+        if (hasShield) {
+            useShield();
+            lava.skips = 0; lava.doom = false; lava.y = lava.targetY = height + 30;
+            showFeedback('🛡️ ¡EL ESCUDO TE SALVA DE LA LAVA!');
+        } else {
+            showFeedback('🌋 ¡LA LAVA TE HA PILLADO!');
+            endGame();
+        }
+    }
+}
+
+function drawLava() {
+    if (!lava.active) return;
+    const top = lava.y;
+    ctx.save();
+    // resplandor en el borde inferior: más intenso cuantos más fallos
+    const heat = lava.doom ? 0.55 : 0.16 + 0.1 * lava.skips;
+    const glow = ctx.createLinearGradient(0, height - 140, 0, height);
+    glow.addColorStop(0, 'rgba(255,90,20,0)'); glow.addColorStop(1, `rgba(255,90,20,${heat})`);
+    ctx.fillStyle = glow; ctx.fillRect(0, height - 140, width, 140);
+    if (top < height + 14) {
+        const grad = ctx.createLinearGradient(0, top, 0, height);
+        grad.addColorStop(0, '#ffd23f'); grad.addColorStop(0.07, '#ff7a1a'); grad.addColorStop(0.5, '#e8310a'); grad.addColorStop(1, '#7a0d00');
+        ctx.fillStyle = grad; ctx.shadowBlur = 26; ctx.shadowColor = '#ff5a14';
+        ctx.beginPath(); ctx.moveTo(0, height + 4);
+        for (let x = 0; x <= width + 12; x += 12) {
+            ctx.lineTo(x, top + Math.sin(x * 0.045 + lava.t * 2) * 5 + Math.sin(x * 0.11 - lava.t * 3) * 3);
+        }
+        ctx.lineTo(width, height + 4); ctx.closePath(); ctx.fill();
+        ctx.shadowBlur = 0;
+        // burbujas
+        ctx.fillStyle = 'rgba(255,230,120,0.75)';
+        for (let i = 0; i < 8; i++) {
+            const bx = (i * 137 + lava.t * 18 * (1 + (i % 3))) % width;
+            const by = top + 12 + ((lava.t * 26 + i * 53) % 70);
+            if (by < height) { ctx.beginPath(); ctx.arc(bx, by, 2 + (i % 3), 0, Math.PI * 2); ctx.fill(); }
+        }
+    }
+    ctx.restore();
+}
+
+// HUD de estado: lava (fallos que quedan) y cuenta atrás de la bomba
+function drawStatusHUD() {
+    if (runEnded && !gameActive && !lava.active) return;
+    let y = 214;
+    ctx.save();
+    ctx.textAlign = 'center';
+    ctx.font = 'bold 12px Outfit, Inter, sans-serif';
+    if (lava.active) {
+        const used = Math.min(lava.skips, LAVA_MAX_SKIPS);
+        const danger = lava.doom || used >= LAVA_MAX_SKIPS;
+        const pulse = 0.65 + 0.35 * Math.sin(performance.now() / (danger ? 90 : 220));
+        ctx.fillStyle = `rgba(255,${danger ? 70 : 150},40,${pulse})`;
+        let pips = '';
+        for (let i = 0; i < LAVA_MAX_SKIPS; i++) pips += i < used ? '✖ ' : '● ';
+        ctx.fillText(lava.doom ? '🌋 ¡TE ALCANZA!' : '🌋 FALLOS  ' + pips.trim(), width / 2, y);
+        y += 20;
+    }
+    if (boxType === 'bomb' && !runEnded) {
+        const urgent = bombFuse < 5;
+        const pulse = urgent ? 0.6 + 0.4 * Math.sin(performance.now() / 80) : 1;
+        ctx.fillStyle = urgent ? `rgba(255,59,47,${pulse})` : 'rgba(255,174,0,0.95)';
+        ctx.fillText('💣 ' + Math.max(0, bombFuse).toFixed(1) + ' s', width / 2, y);
+    }
+    ctx.restore();
+}
+
+// ===================== LÁPIDAS =====================
+function wrapText(c, text, maxW) {
+    const words = text.split(' '), lines = [];
+    let line = '';
+    words.forEach((w) => {
+        const test = line ? line + ' ' + w : w;
+        if (c.measureText(test).width > maxW && line) { lines.push(line); line = w; } else line = test;
+    });
+    if (line) lines.push(line);
+    return lines;
+}
+
+class Tombstone {
+    constructor(platform, count, phrase, t) {
+        this.p = platform; this.count = count; this.phrase = phrase; this.t = t;
+        this.w = 22; this.h = 28;
+    }
+    get x() { return this.p.x + this.t * Math.max(0, this.p.w - this.w); }
+    get y() { return this.p.y - this.h; }
+    update() { return !this.p.isBroken; }
+    draw() {
+        const x = this.x, y = this.y, w = this.w, h = this.h;
+        ctx.save();
+        ctx.globalAlpha = (this.p.alpha === undefined ? 1 : this.p.alpha) * 0.95;
+        // piedra
+        ctx.shadowBlur = 8; ctx.shadowColor = 'rgba(180,200,255,0.55)';
+        ctx.fillStyle = '#8a93a8';
+        ctx.beginPath(); ctx.moveTo(x, y + h); ctx.lineTo(x, y + w / 2); ctx.arc(x + w / 2, y + w / 2, w / 2, Math.PI, 0); ctx.lineTo(x + w, y + h); ctx.closePath(); ctx.fill();
+        ctx.shadowBlur = 0;
+        ctx.strokeStyle = '#4c566c'; ctx.lineWidth = 2; ctx.stroke();
+        ctx.fillStyle = '#3b4357'; ctx.font = 'bold 8px Arial'; ctx.textAlign = 'center';
+        ctx.fillText('RIP', x + w / 2, y + 13);
+        ctx.fillRect(x + w / 2 - 1, y + 16, 2, 9); ctx.fillRect(x + w / 2 - 4, y + 18, 8, 2);
+        ctx.fillStyle = '#4f8a4f'; ctx.fillRect(x - 3, y + h - 3, w + 6, 3); // hierba
+        // bocadillo con la frase (solo si la caja anda cerca y la lápida se ve entera)
+        if (y > 70 && Math.abs(player.y - y) < 280) {
+            ctx.font = '10px Outfit, Inter, sans-serif';
+            const head = '💀 ' + this.count + (this.count === 1 ? ' jugador cayó aquí' : ' jugadores cayeron aquí');
+            const lines = [head, ...wrapText(ctx, this.phrase, 140)];
+            const bw = Math.max(...lines.map((l) => ctx.measureText(l).width)) + 14, bh = lines.length * 13 + 8;
+            const bx = Math.max(6, Math.min(width - bw - 6, x + w / 2 - bw / 2)), by = y - bh - 9;
+            ctx.fillStyle = 'rgba(10,16,36,0.88)'; roundRectPath(ctx, bx, by, bw, bh, 7); ctx.fill();
+            ctx.strokeStyle = 'rgba(180,200,255,0.4)'; ctx.lineWidth = 1; ctx.stroke();
+            ctx.beginPath(); ctx.moveTo(x + w / 2 - 4, by + bh); ctx.lineTo(x + w / 2 + 4, by + bh); ctx.lineTo(x + w / 2, by + bh + 5); ctx.closePath();
+            ctx.fillStyle = 'rgba(10,16,36,0.88)'; ctx.fill();
+            ctx.textAlign = 'center';
+            lines.forEach((l, i) => {
+                ctx.fillStyle = i === 0 ? '#ff8a8a' : '#cfd8ee';
+                ctx.font = (i === 0 ? 'bold ' : '') + '10px Outfit, Inter, sans-serif';
+                ctx.fillText(l, bx + bw / 2, by + 15 + i * 13);
+            });
+        }
+        ctx.restore();
+    }
+}
+
+function pickTombPhrase() {
+    let pool = TOMB_PHRASES.filter((p) => !usedTombPhrases.has(p));
+    if (!pool.length) { usedTombPhrases.clear(); pool = TOMB_PHRASES; }
+    const ph = pool[Math.floor(Math.random() * pool.length)];
+    usedTombPhrases.add(ph);
+    return ph;
+}
+
+// Una sola lápida por nivel: en la plataforma desde la que más gente ha muerto.
+function placeTombstone() {
+    tombstones = [];
+    const dm = modeCfg && modeCfg.deaths && modeCfg.deaths[level];
+    if (!dm) return;
+    let bestIdx = -1, bestN = 0;
+    Object.keys(dm).forEach((k) => {
+        const n = dm[k] | 0, i = +k;
+        if (n > bestN) { bestN = n; bestIdx = i; }
+    });
+    if (bestIdx < 0 || bestN < 1) return;
+    const p = platforms.find((q) => q.idx === bestIdx);
+    if (!p || p.w < 40) return;
+    tombstones.push(new Tombstone(p, bestN, pickTombPhrase(), 0.12 + Math.random() * 0.3));
+}
+
+// ===================== RESCATE EN EL ÚLTIMO SEGUNDO (QTE) =====================
+function resetRescue() {
+    rescue.active = false; rescue.usedThisLevel = false; rescue.phase = 'idle';
+    rescue.step = 0; rescue.elapsed = 0; rescue.btn = null; rescue.prev = null; rescue.target = null; rescue.rise = null;
+}
+const rescueRadius = () => RESCUE_START_R * Math.max(0, 1 - rescue.elapsed / RESCUE_TIME);
+
+// Plataforma a la que subirá la caja: la más cercana por encima, sin plataformas con movimiento.
+function rescueTarget() {
+    const c = platforms.filter((p) => !p.isBroken && p.type !== 'moving' && p.type !== 'oscillating' &&
+        p.type !== 'flash' && p.type !== 'temp_full' && p.y < player.y);
+    c.sort((a, b) => b.y - a.y);
+    return c[0] || null;
+}
+function platformBelow() {
+    const feet = player.y + player.h;
+    return platforms.some((p) => !p.isBroken && !(p.type === 'flash' && !p.isVisible) && p.y >= feet - 4 &&
+        player.x + player.w + 14 > p.x && player.x - 14 < p.x + (p.type === 'temp_full' ? width : p.w));
+}
+function maybeStartRescue() {
+    if (rescue.active || rescue.usedThisLevel || runEnded || hasShield || bombActive) return false;
+    if (player.onGround || player.vy <= 1) return false;                 // solo cayendo
+    if (player.y + player.h < height * RESCUE_TRIGGER) return false;     // aún queda mucha caída
+    if (platformBelow()) return false;                                   // hay algo que te recoja
+    if (!rescueTarget()) return false;                                   // y debe haber plataforma a la que subir
+    rescue.active = true; rescue.usedThisLevel = true;
+    rescue.phase = 'qte'; rescue.step = 0; rescue.prev = null;
+    rescue.target = rescueTarget();
+    newRescueButton();
+    showFeedback('🆘 ¡RESCATE!\nPulsa cuando el aro encaje');
+    return true;
+}
+function newRescueButton() {
+    const bar = precisionSystem.canal, pad = RESCUE_TARGET_R + 30;
+    const minX = (precisionSystem.side === 'left' ? bar.x + bar.w + 10 : 0) + pad;
+    const maxX = Math.max(minX + 1, (precisionSystem.side === 'right' ? bar.x - 10 : width) - pad);
+    const minY = 250, maxY = Math.max(minY + 1, height * 0.74 - 20);
+    let x, y, tries = 0;
+    do {
+        x = minX + Math.random() * (maxX - minX); y = minY + Math.random() * (maxY - minY); tries++;
+    } while (tries < 25 && rescue.prev && Math.hypot(x - rescue.prev.x, y - rescue.prev.y) < 150);
+    rescue.btn = { x, y }; rescue.prev = { x, y }; rescue.elapsed = 0;
+}
+function rescuePress(px, py) {
+    if (rescue.phase !== 'qte' || !rescue.btn) return;
+    if (Math.hypot(px - rescue.btn.x, py - rescue.btn.y) > RESCUE_TARGET_R + 24) return; // fuera del botón: se ignora
+    const tol = RESCUE_TOL[rescue.step];
+    if (Math.abs(rescueRadius() - RESCUE_TARGET_R) <= tol) {
+        const last = rescue.step === RESCUE_STEPS - 1;
+        spawnFirework(rescue.btn.x, rescue.btn.y, last);
+        if (navigator.vibrate) { try { navigator.vibrate(12); } catch (e) { } }
+        rescue.step++;
+        if (last) rescueSuccess(); else newRescueButton();
+    } else {
+        rescueFail(rescueRadius() > RESCUE_TARGET_R ? '¡TEMPRANO!' : '¡TARDE!');
+    }
+}
+function rescueFail(msg) {
+    rescue.active = false; rescue.phase = 'idle'; rescue.btn = null;
+    showFeedback(msg + ' 💀');
+    createExplosion(player.x + player.w / 2, player.y + player.h / 2, 0.2);
+}
+function rescueSuccess() {
+    const t = (rescue.target && !rescue.target.isBroken) ? rescue.target : rescueTarget();
+    if (!t) { rescueFail('¡SIN PLATAFORMA!'); return; }
+    rescue.phase = 'rise'; rescue.btn = null;
+    rescue.rise = {
+        t: 0, dur: 750, x0: player.x, y0: player.y,
+        x1: Math.max(0, Math.min(width - player.w, t.x + t.w / 2 - player.w / 2)), y1: t.y - player.h,
+        spin: Math.PI * 2 * (player.x < t.x ? 1 : -1)
+    };
+    player.vx = 0; player.vy = 0; player.angularVelocity = 0;
+    showFeedback('🎆 ¡RESCATE PERFECTO!');
+}
+function rescueLand() {
+    const r = rescue.rise;
+    player.x = r.x1; player.y = r.y1; player.vx = 0; player.vy = 0;
+    player.rotation = 0; player.angularVelocity = 0; player.onGround = false; player.bouncesLeft = 2;
+    rescue.active = false; rescue.phase = 'idle'; rescue.rise = null;
+    // la física normal la posa en la plataforma (cuenta como aterrizaje: cofres, meta, etc.)
+}
+function updateRescue(dtMs) {
+    if (rescue.phase === 'qte') {
+        rescue.elapsed += dtMs;
+        // cámara lentísima: la caja sigue cayendo apenas un poco
+        player.y = Math.min(height * 0.9 - player.h, player.y + Math.max(0, player.vy) * 0.03);
+        player.rotation += 0.002;
+        const tol = RESCUE_TOL[rescue.step];
+        if (rescueRadius() < RESCUE_TARGET_R - tol - 2 || rescue.elapsed >= RESCUE_TIME) rescueFail('¡TARDE!');
+    } else if (rescue.phase === 'rise' && rescue.rise) {
+        const r = rescue.rise;
+        r.t += dtMs / r.dur;
+        const k = Math.min(1, r.t), e = 1 - Math.pow(1 - k, 3);
+        player.x = r.x0 + (r.x1 - r.x0) * e;
+        player.y = r.y0 + (r.y1 - r.y0) * e;
+        player.rotation = (1 - e) * r.spin;
+        emitRocketFlame();
+        if (k >= 1) rescueLand();
+    } else {
+        rescue.active = false;
+    }
+}
+function spawnFirework(x, y, big) {
+    const cols = ['#ff4d6d', '#ffd23f', '#00f2ff', '#7dff6b', '#ff00ea', '#ffffff'];
+    const n = big ? 80 : 40;
+    for (let i = 0; i < n; i++) {
+        const a = Math.random() * Math.PI * 2, s = (big ? 2 : 1.4) + Math.random() * (big ? 6.5 : 4.2);
+        particles.push({
+            x, y, vx: Math.cos(a) * s, vy: Math.sin(a) * s, life: 1, decay: 0.014 + Math.random() * 0.012,
+            size: 3 + Math.random() * 3, color: cols[(Math.random() * cols.length) | 0], fire: true
+        });
+    }
+}
+function drawRescue() {
+    if (!rescue.active) return;
+    ctx.save();
+    // viñeta azulada: sensación de cámara lenta
+    const vg = ctx.createRadialGradient(width / 2, height / 2, height * 0.2, width / 2, height / 2, height * 0.85);
+    vg.addColorStop(0, 'rgba(0,0,0,0)'); vg.addColorStop(1, 'rgba(0,12,50,0.6)');
+    ctx.fillStyle = vg; ctx.fillRect(0, 0, width, height);
+    ctx.textAlign = 'center';
+    if (rescue.phase === 'qte' && rescue.btn) {
+        const { x, y } = rescue.btn, r = rescueRadius(), tol = RESCUE_TOL[rescue.step];
+        const inWin = Math.abs(r - RESCUE_TARGET_R) <= tol;
+        const TAU = Math.PI * 2;
+        // zona de acierto (anillo verde tenue)
+        ctx.lineWidth = tol * 2; ctx.strokeStyle = 'rgba(0,255,100,0.16)';
+        ctx.beginPath(); ctx.arc(x, y, RESCUE_TARGET_R, 0, TAU); ctx.stroke();
+        // círculo fijo
+        ctx.lineWidth = 3; ctx.strokeStyle = '#fff'; ctx.shadowBlur = 12; ctx.shadowColor = '#fff';
+        ctx.beginPath(); ctx.arc(x, y, RESCUE_TARGET_R, 0, TAU); ctx.stroke();
+        // botón
+        ctx.shadowBlur = 18; ctx.shadowColor = inWin ? '#00ff64' : '#00f2ff';
+        ctx.fillStyle = inWin ? 'rgba(0,255,100,0.55)' : 'rgba(0,242,255,0.28)';
+        ctx.beginPath(); ctx.arc(x, y, RESCUE_TARGET_R - 7, 0, TAU); ctx.fill();
+        ctx.shadowBlur = 0; ctx.fillStyle = '#fff'; ctx.font = 'bold 11px Outfit, Inter, sans-serif';
+        ctx.fillText('TAP', x, y + 4);
+        // aro grande que se va achicando
+        if (r > 1) {
+            ctx.lineWidth = 5; ctx.strokeStyle = inWin ? '#00ff64' : '#00f2ff';
+            ctx.shadowBlur = 14; ctx.shadowColor = ctx.strokeStyle;
+            ctx.beginPath(); ctx.arc(x, y, r, 0, TAU); ctx.stroke();
+        }
+        // progreso: 3 puntos
+        ctx.shadowBlur = 0;
+        for (let i = 0; i < RESCUE_STEPS; i++) {
+            ctx.fillStyle = i < rescue.step ? '#00ff64' : 'rgba(255,255,255,0.3)';
+            ctx.beginPath(); ctx.arc(width / 2 + (i - 1) * 22, 222, 6, 0, TAU); ctx.fill();
+        }
+    }
+    ctx.restore();
+}
+
 // --- CÁMARA en saltos muy grandes ---
 // La plataforma de la que sale el jugador se mantiene visible abajo del todo
 // mientras dure el salto (sin zoom). Se sigue la plataforma aunque desaparezca.
@@ -1362,8 +1903,12 @@ const PLAYER_MIN_Y = 0.12;         // el jugador nunca sube por encima de este %
 let originY = null;
 
 function update() {
+    const nowT = performance.now();
+    const dtMs = Math.min(50, nowT - lastUpdateT); lastUpdateT = nowT; // el tiempo en pausa/apuntando no cuenta
     if (!gameActive) return;
     if (aim.active) { aim.update(); updateParticles(); return; } // mundo congelado mientras se apunta
+    if (rescue.active) { updateRescue(dtMs); updateParticles(); return; } // rescate: mundo congelado
+    if (maybeStartRescue()) { updateParticles(); return; }
     player.update();
     // Cohete: mientras sube tras un autosalto
     if (player.rocket) {
@@ -1371,10 +1916,13 @@ function update() {
         else emitRocketFlame();
     }
     precisionSystem.update();
+    updateBombBox(dtMs / 1000);
+    updateLava();
 
     // Actualizar entidades
     obstacles = obstacles.filter(obs => obs.update());
     chests = chests.filter(c => c.update());
+    tombstones = tombstones.filter(t => t.update());
     powerups = powerups.filter(pu => pu.update());
     for (let i = props.length - 1; i >= 0; i--) {
         if (!props[i].update()) props.splice(i, 1);
@@ -1416,6 +1964,7 @@ function update() {
         obstacles.forEach(o => o.y += diff);
         powerups.forEach(pu => pu.y += diff);
         blackHoles.forEach(bh => bh.y += diff);
+        lava.y += diff; lava.targetY += diff;
     }
 
     trackHeight();
@@ -1445,10 +1994,13 @@ function draw() {
     blackHoles.forEach(bh => bh.draw());
     platforms.forEach(p => p.draw());
     chests.forEach(c => c.draw());
+    tombstones.forEach(t => t.draw());
     powerups.forEach(pu => pu.draw());
     props.forEach(pr => pr.draw());
     obstacles.forEach(o => o.draw());
+    drawLava();
     player.draw();
+    drawBombRing();
 
     // UI del Escudo / Powerups
     if (hasShield) {
@@ -1463,11 +2015,6 @@ function draw() {
         ctx.font = "bold 12px Arial";
         ctx.fillText("2J READY", player.x, player.y - 10);
     }
-    if (stickyTurns > 0) {
-        ctx.fillStyle = '#00ff64';
-        ctx.font = "bold 11px Arial";
-        ctx.fillText("PEGA x" + stickyTurns, player.x, player.y - (canDoubleJump ? 24 : 10));
-    }
 
     particles.forEach(p => {
         const sz = p.size || 4;
@@ -1481,6 +2028,8 @@ function draw() {
 
     precisionSystem.draw();
     drawWindHUD();
+    drawStatusHUD();
+    drawRescue();
     aim.draw();
 }
 
@@ -1514,6 +2063,11 @@ function finishRun(completed) {
     runEnded = true;
     gameActive = false;
     aim.cancel();
+    resetRescue();
+    // Muerte registrada para las lápidas de los demás (solo fase diaria y fases de la comunidad)
+    if (!completed && modeCfg && modeCfg.onDeath && lastPlatIdx >= 0) {
+        try { modeCfg.onDeath({ level, platIdx: lastPlatIdx }); } catch (e) { console.error(e); }
+    }
     const cleared = modeCfg ? (completed ? modeCfg.last - modeCfg.first + 1 : level - modeCfg.first) : level - 1;
     const finalHeight = heightCm();
     finalScore.innerText = finalHeight;
@@ -1548,6 +2102,7 @@ function goToMenu() {
     if (!runEnded && gameMode === 'normal' && window.BJFirebase) window.BJFirebase.reportRun(level, heightCm());
     runEnded = true; gameActive = false; bombActive = false;
     aim.cancel(); cancelReels(); updateInventoryUI();
+    resetRescue(); tombstones = []; lava.active = false;
     modeCfg = null; gameMode = 'normal';
     [gameOverScreen, document.getElementById('items-modal'), document.getElementById('settings-modal'), document.getElementById('ranking-modal')]
         .forEach(el => el && el.classList.add('hidden'));
@@ -1623,6 +2178,14 @@ const triggerAction = (e) => {
 
     if (!gameActive) return;
 
+    // Rescate en el último segundo: los toques van a los botones, no a la barra de precisión
+    if (rescue.active) {
+        const rect = canvas.getBoundingClientRect();
+        const pt = (e.touches && e.touches.length) ? e.touches[0] : e;
+        rescuePress(pt.clientX - rect.left, pt.clientY - rect.top);
+        return;
+    }
+
     // Medidor de ángulo activo: este toque fija el ángulo y lanza
     if (aim.active) { aim.lock(); return; }
 
@@ -1634,7 +2197,7 @@ const triggerAction = (e) => {
     if (precision.multiplier > 0) {
         if (player.onGround) {
             // Con viento: primero se apunta (medidor de ángulo); sin viento, salto directo
-            if (!(windForce !== 0 && aim.start(precision))) handleJump(precision);
+            if (!(effWind() !== 0 && aim.start(precision))) handleJump(precision);
         } else if (canDoubleJump && !doubleJumpUsed) {
             handleJump(precision);
             doubleJumpUsed = true;
@@ -1661,7 +2224,7 @@ window.addEventListener('touchstart', (e) => {
 // INVENTARIO (los objetos salen de los cofres; usarlos es gratis)
 const game = {
     useItem(index) {
-        if (!gameActive || runEnded || aim.active || !inventory[index]) return;
+        if (!gameActive || runEnded || aim.active || rescue.active || !inventory[index]) return;
         const type = inventory[index];
         inventory.splice(index, 1);
         updateInventoryUI();
@@ -1688,10 +2251,6 @@ const game = {
                 bombActive = true;
                 gameActive = false;
                 showFeedback("💣 TOCA UNA PLATAFORMA PARA EXPLOTARLA");
-                break;
-            case 'sticky':
-                stickyTurns = 3;
-                showFeedback("🟢 ¡CAJA PEGAJOSA! 3 TURNOS");
                 break;
         }
     }
@@ -1801,5 +2360,41 @@ window.BJGame = {
     mapX,
     getSide: () => precisionSystem.side,
 };
+
+// --- Selector de caja (menú principal) ---
+function initBoxPicker() {
+    const wrap = document.getElementById('box-options'), desc = document.getElementById('box-desc');
+    if (!wrap) return;
+    const items = [];
+    Object.keys(BOX_TYPES).forEach((key) => {
+        const el = document.createElement('div');
+        el.className = 'box-opt'; el.setAttribute('role', 'button'); el.title = BOX_TYPES[key].name;
+        const cv = document.createElement('canvas'); cv.width = 40; cv.height = 40;
+        const lb = document.createElement('span'); lb.textContent = BOX_TYPES[key].name;
+        el.appendChild(cv); el.appendChild(lb);
+        el.addEventListener('click', () => selectBox(key));
+        wrap.appendChild(el);
+        items.push({ key, el, cv });
+    });
+    function paint() {
+        items.forEach(({ key, cv }) => {
+            const c = cv.getContext('2d');
+            c.clearRect(0, 0, 40, 40);
+            c.save(); c.translate(20, 20);
+            drawBoxShape(c, key, 24, 24, performance.now(), { fuse: 99 });
+            c.restore();
+        });
+    }
+    function selectBox(key) {
+        boxType = key;
+        try { localStorage.setItem('boxjump_box_type', key); } catch (e) { /* no disponible */ }
+        items.forEach((i) => i.el.classList.toggle('active', i.key === key));
+        if (desc) desc.textContent = BOX_TYPES[key].desc;
+        paint();
+    }
+    selectBox(boxType);
+    setInterval(() => { if (!startScreen.classList.contains('hidden')) paint(); }, 90); // alas y mechas animadas
+}
+initBoxPicker();
 
 gameLoop();

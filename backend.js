@@ -652,6 +652,32 @@
         return snap.exists ? { uid: snap.id, ...snap.data() } : null;
     }
 
+    // Lápidas: contador de muertes por nivel y plataforma.
+    //   daily/{fecha}/deaths/L{nivel}   y   levels/{id}/deaths/L{nivel}
+    //   Cada documento es { p0: n, p1: n, ... }: p{i} = veces que alguien murió saltando desde la plataforma i del nivel.
+    const deathsCol = (kind, id) => (kind === 'daily'
+        ? db.collection('daily').doc(id).collection('deaths')
+        : db.collection('levels').doc(id).collection('deaths'));
+    async function reportDeath(kind, id, level, platIdx) {
+        if (!currentUser || !id || platIdx == null || platIdx < 0) return;
+        try {
+            await deathsCol(kind, id).doc('L' + level).set({ ['p' + platIdx]: firebase.firestore.FieldValue.increment(1) }, { merge: true });
+        } catch (err) { console.warn('No se pudo registrar la muerte', err); }
+    }
+    // Devuelve { [nivel]: { [idxPlataforma]: nMuertes } }
+    async function getDeaths(kind, id) {
+        const snap = await deathsCol(kind, id).get();
+        const out = {};
+        snap.docs.forEach((d) => {
+            const lv = parseInt(d.id.slice(1), 10);
+            if (!(lv >= 1)) return;
+            const m = {};
+            Object.entries(d.data()).forEach(([k, v]) => { if (k[0] === 'p' && v > 0) m[parseInt(k.slice(1), 10)] = v | 0; });
+            out[lv] = m;
+        });
+        return out;
+    }
+
     // Borradores
     async function listDrafts() {
         if (!currentUser) return [];
@@ -720,6 +746,7 @@
         saveProgress,
         uid: () => (currentUser ? currentUser.uid : null),
         reportDaily, getDailyTop, getMyDaily,
+        reportDeath, getDeaths,
         listDrafts, saveDraft, deleteDraft,
         publishLevel, unpublishLevel, searchLevels, bumpLevelStat,
     };

@@ -74,13 +74,26 @@
         }
     }
 
-    function playDaily() {
+    // Muertes de otros jugadores (lápidas). Si tarda o falla, se juega sin lápidas.
+    async function loadDeaths(kind, id) {
+        try {
+            return await Promise.race([FB().getDeaths(kind, id), new Promise((res) => setTimeout(() => res(null), 2500))]);
+        } catch (e) { console.warn('Lápidas no disponibles:', e); return null; }
+    }
+
+    async function playDaily() {
         if (needLogin()) return;
         const key = dailyKey();
+        const btn = $('daily-play-btn');
+        btn.disabled = true;
+        const deaths = await loadDeaths('daily', key);
+        btn.disabled = false;
         hide($('daily-screen'));
         G.start({
             type: 'daily', first: DAILY_FIRST, last: DAILY_FIRST + DAILY_TOTAL - 1, total: DAILY_TOTAL,
             seed: 'bj-daily-' + key,
+            deaths,
+            onDeath: (d) => FB().reportDeath('daily', key, d.level, d.platIdx),
             onEnd: (r) => {
                 pendingReport = FB().reportDaily(key, { cleared: r.cleared, height: r.height, completed: r.completed })
                     .catch((e) => console.error('No se pudo guardar el resultado diario:', e));
@@ -232,12 +245,15 @@
         }
     }
 
-    function playCommunity(lv) {
+    async function playCommunity(lv) {
         const d = normalizeDraft(lv);
         FB().bumpLevelStat(lv.id, 'plays');
+        const deaths = await loadDeaths('level', lv.id);
         hide($('creator-screen'));
         G.start({
             type: 'custom', first: 1, last: N_LEVELS, total: N_LEVELS, levels: d.levels,
+            deaths,
+            onDeath: (x) => FB().reportDeath('level', lv.id, x.level, x.platIdx),
             onEnd: (r) => {
                 if (r.completed) FB().bumpLevelStat(lv.id, 'completions');
                 return {
