@@ -232,19 +232,164 @@ const BOX_TYPES = {
     normal: { name: 'Clásica',  wind: 1,   grav: 1,   desc: 'Equilibrada y sin trucos.' },
     heavy:  { name: 'Pesada',   wind: 0,   grav: 1,   desc: 'Ignora el viento por completo.' },
     light:  { name: 'Ligera',   wind: 1.3, grav: 0.6, desc: 'Planea: cae muy despacio, pero el viento la empuja más.' },
-    rubber: { name: 'Goma',     wind: 1,   grav: 1,   desc: 'Rebota al caer y contra las paredes.' },
+    rubber: { name: 'Goma',     wind: 1,   grav: 1,   desc: 'Rebota al caer y en las paredes. Toca la caja (1 vez por nivel) y bota como un resorte.' },
     sticky: { name: 'Pegajosa', wind: 1,   grav: 1,   desc: 'Se pega a la plataforma donde aterriza, sea cual sea la inercia o el tipo de plataforma.' },
-    bomb:   { name: 'Bomba',    wind: 1,   grav: 1,   desc: 'Al empezar cada nivel tienes 20 s para llegar a la meta y desactivarla.' },
+    bomb:   { name: 'Bomba',    wind: 1,   grav: 1,   desc: 'Tienes 20 s por nivel para llegar a la meta. Si la desactivas, sale disparada como un cohete, explota y aparece otra caja.' },
+    gravity: { name: 'Gravedad', wind: 1,   grav: 1,   desc: 'Gravedad invertida: se agarra a la parte INFERIOR de las plataformas. Si sube hasta el techo, cae sobre la plataforma más cercana.' },
+    mystery: { name: 'Misteriosa', wind: 1, grav: 1,  desc: 'Se comporta como otra caja al azar... pero no te dice cuál.' },
 };
 const BOMB_FUSE_SECONDS = 20;
-let boxType = 'normal';
-try { const bt = localStorage.getItem('boxjump_box_type'); if (bt && BOX_TYPES[bt]) boxType = bt; } catch (e) { /* no disponible */ }
+let chosenBox = 'normal';   // la que eliges en el menú: solo vale para los 3 primeros niveles
+try { const sb = localStorage.getItem('boxjump_box_type'); if (sb && BOX_TYPES[sb]) chosenBox = sb; } catch (e) { /* no disponible */ }
+let boxType = chosenBox;    // la caja activa ahora mismo (cambia sola cada 3 niveles)
+let mysteryAs = 'normal';   // comportamiento real de la caja misteriosa
+const BOX_SWAP_EVERY = 3;   // niveles que dura cada caja al azar
+const GRAV_MAX_V = 26;      // velocidad máxima de la caja de gravedad
+let runFirstLevel = 1;      // primer nivel de la partida en curso
+let rubberBoostUsed = false; // bote de la caja de goma (1 por nivel)
+let bombRocket = false;     // la bomba desactivada vuela como un cohete
+const boxKind = () => (boxType === 'mystery' ? mysteryAs : boxType); // comportamiento real
 let bombFuse = BOMB_FUSE_SECONDS;
 let lastUpdateT = performance.now();
-const boxCfg = () => BOX_TYPES[boxType];
+const boxCfg = () => BOX_TYPES[boxKind()];
 const effWind = () => windForce * boxCfg().wind;          // viento que de verdad afecta a esta caja
 const effGrav = () => player.gravity * boxCfg().grav;     // gravedad propia de esta caja
 const armBomb = () => { bombFuse = BOMB_FUSE_SECONDS; };
+
+// ===================== CAMBIO DE CAJA, GRAVEDAD, COHETE-BOMBA, BOTE DE GOMA =====================
+const BOX_KEYS = Object.keys(BOX_TYPES);
+const boxLabel = (k) => (k === 'mystery' ? '❓ Misteriosa' : BOX_TYPES[k].name);
+function rollRandomBox(exclude) {
+    const pool = BOX_KEYS.filter((k) => k !== exclude);
+    return pool[Math.floor(Math.random() * pool.length)];
+}
+function pickMysteryBehavior() {
+    const pool = BOX_KEYS.filter((k) => k !== 'mystery');
+    mysteryAs = pool[Math.floor(Math.random() * pool.length)];
+}
+function setActiveBox(key) {
+    boxType = key;
+    if (key === 'mystery') pickMysteryBehavior();
+    placeOnPlatform();
+}
+// Coloca la caja sobre la plataforma (o colgada debajo si es de gravedad)
+function placeOnPlatform() {
+    const p = player.currentPlatform;
+    if (!p || !player.onGround) { player.gravSide = boxKind() === 'gravity' ? 'under' : 'over'; return; }
+    if (boxKind() === 'gravity') { player.gravSide = 'under'; player.y = p.y + p.h; }
+    else { player.gravSide = 'over'; player.y = p.y - player.h; }
+    player.vy = 0;
+}
+
+// --- Caja de gravedad ---
+function computeGravityJump(tier) {
+    const cur = player.currentPlatform;
+    const cands = platforms
+        .filter((p) => p !== cur && !(p.type === 'flash' && !p.isVisible) && p.y + p.h < player.y - 2)
+        .sort((a, b) => b.y - a.y);
+    if (!cands.length) return null;
+    const target = cands[0];
+    const g = effGrav();
+    const d = player.y - (target.y + target.h);          // recorrido hasta la cara inferior
+    const mult = (tier === 'PERFECT') ? 1.08 : (tier === 'GOOD' ? 1.45 : (Math.random() > 0.5 ? 2.0 : 0.4));
+    const v = Math.max(1.5, Math.sqrt(g * d) * mult);
+    const totalT = (-v + Math.sqrt(v * v + 2 * g * d)) / g; // la gravedad también tira hacia arriba
+    const dx = (target.x + target.w / 2) - (player.x + player.w / 2);
+    return { vy: -v, vxBase: dx / totalT, totalT, target, tier };
+}
+function gravityLand(p, side) {
+    player.gravSide = side;
+    player.y = side === 'under' ? p.y + p.h : p.y - player.h;
+    player.vy = 0; player.angularVelocity = 0; player.rotation = 0;
+    player.onGround = true;
+    if (player.currentPlatform === p) return;
+    if (p.type === 'moving') player.vx = 0;
+    player.currentPlatform = p;
+    lastPlatIdx = p.idx;
+    platformsReached++;
+    doubleJumpUsed = false;
+    createExplosion(player.x + player.w / 2, side === 'under' ? p.y + p.h : p.y, 0.4);
+    chests.forEach((c) => { if (c.p === p && !c.opened) openChest(c); });
+    if ((p.type === 'vanishing' || p.type === 'fragile') && !p.vanishingStarted) {
+        p.vanishingStarted = true; p.startTime = Date.now();
+    }
+    if (p.isGoal) nextLevel();
+}
+function gravityCollisions(wasOnGround) {
+    const cur = player.currentPlatform;
+    // Agarrada: se queda donde está mientras exista su plataforma
+    if (wasOnGround && cur && platforms.includes(cur)) {
+        player.onGround = true; player.vy = 0;
+        player.y = player.gravSide === 'over' ? cur.y - player.h : cur.y + cur.h;
+        return;
+    }
+    // Sube y choca con la cara inferior de una plataforma: se queda colgada
+    if (player.vy <= 0) {
+        for (const p of platforms) {
+            if (p === cur) continue;
+            if (p.type === 'flash' && !p.isVisible) continue;
+            if (player.x + player.w > p.x && player.x < p.x + p.w && player.y <= p.y + p.h && player.y >= p.y - 12) {
+                gravityLand(p, 'under');
+                return;
+            }
+        }
+    }
+}
+// Si "cae" hacia arriba y toca la parte alta de la pantalla, aterriza sobre la plataforma más cercana
+function gravityTopCheck() {
+    if (boxKind() !== 'gravity' || player.onGround || player.vy >= 0 || runEnded) return;
+    if (player.y > height * PLAYER_MIN_Y + 3) return;
+    const visible = (p) => !p.isBroken && !(p.type === 'flash' && !p.isVisible);
+    // si hay una plataforma justo encima, que se encargue la colisión
+    const aboutToHit = platforms.some((p) => visible(p) && p !== player.currentPlatform &&
+        player.x + player.w > p.x && player.x < p.x + p.w && p.y + p.h >= player.y - 30 && p.y + p.h <= player.y + 4);
+    if (aboutToHit) return;
+    const pcx = player.x + player.w / 2;
+    let best = null, bd = Infinity;
+    platforms.forEach((p) => {
+        if (!visible(p)) return;
+        const cx = Math.max(p.x, Math.min(pcx, p.x + p.w));
+        const d = Math.hypot(cx - pcx, p.y - player.y);
+        if (d < bd) { bd = d; best = p; }
+    });
+    if (!best) return;
+    player.x = Math.max(best.x, Math.min(player.x, best.x + best.w - player.w));
+    player.vx = 0;
+    createExplosion(player.x + player.w / 2, player.y, 0.8);
+    showFeedback('🟣 ¡TECHO!\nCaes sobre la plataforma más cercana');
+    gravityLand(best, 'over');
+}
+
+// --- Caja bomba: al desactivarla sale disparada como un cohete, explota y aparece otra caja ---
+function launchBombRocket() {
+    bombRocket = true;
+    player.vy = -Math.sqrt(2 * player.gravity * 320);
+    player.vx = 0; player.angularVelocity = 0; player.rotation = 0;
+    player.straightBounce = true; player.rocket = true; player.onGround = false;
+}
+function updateBombRocket() {
+    if (!bombRocket) return;
+    if (player.vy > -1.5 || player.onGround) {
+        bombRocket = false; player.rocket = false;
+        const cx = player.x + player.w / 2, cy = player.y + player.h / 2;
+        createExplosion(cx, cy, 2.5); createExplosion(cx, cy, 1.2);
+        if (navigator.vibrate) { try { navigator.vibrate(60); } catch (e) { /* sin vibración */ } }
+        const next = rollRandomBox(boxType);
+        setActiveBox(next);
+        showFeedback('💥 ¡LA BOMBA ESTALLA!\n📦 Nueva caja: ' + boxLabel(next));
+    }
+}
+
+// --- Caja de goma: un toque sobre ella (1 vez por nivel) la hace botar como una plataforma-resorte ---
+function rubberBoost() {
+    rubberBoostUsed = true;
+    player.vy = -Math.sqrt(2 * effGrav() * 220) * 1.4;
+    player.vx = 0; player.straightBounce = true; player.rocket = true;
+    player.onGround = false; player.angularVelocity = 0; player.squash = 1;
+    doubleJumpUsed = false;
+    showFeedback('🟣 ¡BOTE!');
+    createExplosion(player.x + player.w / 2, player.y + player.h, 0.8);
+}
 
 function roundRectPath(c, x, y, w, h, r) {
     c.beginPath();
@@ -320,6 +465,32 @@ function drawBoxShape(c, type, w, h, t, o = {}) {
             }
             break;
         }
+        case 'gravity': { // violeta con chevrons hacia arriba
+            c.shadowBlur = 14; c.shadowColor = '#a78bfa';
+            const g = c.createLinearGradient(0, y, 0, y + h);
+            g.addColorStop(0, '#7c3aed'); g.addColorStop(1, '#312e81');
+            c.fillStyle = g; c.fillRect(x, y, w, h);
+            c.shadowBlur = 0;
+            c.strokeStyle = '#c4b5fd'; c.lineWidth = 2; c.strokeRect(x + 2, y + 2, w - 4, h - 4);
+            const a = 0.55 + 0.45 * Math.sin(t * 0.006);
+            c.strokeStyle = '#ede9fe'; c.lineWidth = 2; c.lineCap = 'round'; c.lineJoin = 'round';
+            [[0.66, a], [0.36, 1.2 - a]].forEach(([ky, al]) => {
+                c.globalAlpha = Math.max(0.2, Math.min(1, al));
+                c.beginPath(); c.moveTo(-w * 0.22, y + h * ky + 4); c.lineTo(0, y + h * ky - 4); c.lineTo(w * 0.22, y + h * ky + 4); c.stroke();
+            });
+            c.globalAlpha = 1;
+            break;
+        }
+        case 'mystery': { // oscura con borde arcoíris y un "?"
+            const hue = (t * 0.05) % 360;
+            c.shadowBlur = 12; c.shadowColor = `hsl(${hue},90%,60%)`;
+            c.fillStyle = '#2b2140'; c.fillRect(x, y, w, h);
+            c.shadowBlur = 0;
+            c.strokeStyle = `hsl(${hue},90%,65%)`; c.lineWidth = 2; c.strokeRect(x + 2, y + 2, w - 4, h - 4);
+            c.fillStyle = '#fff'; c.font = `bold ${Math.max(10, Math.round(h * 0.62))}px Arial`;
+            c.textAlign = 'center'; c.textBaseline = 'middle'; c.fillText('?', 0, 1);
+            break;
+        }
         default: { // clásica
             c.shadowBlur = 15; c.shadowColor = THEME.player; c.fillStyle = THEME.player;
             c.fillRect(x, y, w, h);
@@ -332,8 +503,9 @@ function drawBoxShape(c, type, w, h, t, o = {}) {
 
 // ===================== LAVA ASCENDENTE (cada 10 niveles) =====================
 const LAVA_EVERY = 10;      // un nivel de lava cada N niveles
-const LAVA_MAX_SKIPS = 3;   // pasadas de la bola que puedes dejar sin pulsar; la siguiente te alcanza la lava
-const lava = { active: false, y: 0, targetY: 0, skips: 0, doom: false, armed: false, t: 0 };
+const LAVA_MAX_SKIPS = 3;   // (en desuso) antes: pasadas sin pulsar
+const LAVA_RISE_EVERY = 8;  // segundos entre cada subida de la lava
+const lava = { active: false, y: 0, targetY: 0, skips: 0, doom: false, armed: false, t: 0, timer: 8 };
 
 // ===================== LÁPIDAS (muertes de otros jugadores) =====================
 let tombstones = [];
@@ -391,13 +563,15 @@ const player = {
     currentPlatform: null,
     bouncesLeft: 2,   // rebotes que le quedan a la caja de goma
     squash: 0,        // aplastamiento visual (goma)
+    gravSide: 'over', // 'over' = encima de la plataforma; 'under' = colgada debajo (caja de gravedad)
 
     update() {
         if (this.squash > 0) this.squash = Math.max(0, this.squash - 0.07);
         // Viento si no está en el suelo (la caja pesada lo ignora, la ligera lo nota más)
         if (!this.onGround) {
             if (!this.straightBounce) this.vx += effWind();
-            this.vy += effGrav() * gravityFactor;
+            if (boxKind() === 'gravity') this.vy = Math.max(-GRAV_MAX_V, this.vy - effGrav() * gravityFactor); // cae hacia arriba
+            else this.vy += effGrav() * gravityFactor;
             this.rotation += this.angularVelocity;
         } else {
             this.vy = 0;
@@ -406,7 +580,7 @@ const player = {
             let friction = 0.85;
             if (this.currentPlatform && this.currentPlatform.type === 'ice') friction = 0.98;
             if (this.currentPlatform && (this.currentPlatform.type === 'sticky' || this.currentPlatform.type === 'mini_sticky')) friction = 0;
-            if (boxType === 'sticky') friction = 0; // la caja pegajosa se queda clavada donde cae
+            if (boxKind() === 'sticky') friction = 0; // la caja pegajosa se queda clavada donde cae
 
             this.vx *= friction;
             this.rotation = 0;
@@ -438,8 +612,8 @@ const player = {
         this.x += this.vx;
         this.y += this.vy;
 
-        if (this.x < 0) { this.x = 0; if (boxType === 'rubber' && !this.onGround) this.vx = Math.abs(this.vx) * 0.85; }
-        if (this.x + this.w > width) { this.x = width - this.w; if (boxType === 'rubber' && !this.onGround) this.vx = -Math.abs(this.vx) * 0.85; }
+        if (this.x < 0) { this.x = 0; if (boxKind() === 'rubber' && !this.onGround) this.vx = Math.abs(this.vx) * 0.85; }
+        if (this.x + this.w > width) { this.x = width - this.w; if (boxKind() === 'rubber' && !this.onGround) this.vx = -Math.abs(this.vx) * 0.85; }
 
         if (this.y > height) {
             if (hasShield) {
@@ -454,7 +628,7 @@ const player = {
         ctx.save();
         ctx.translate(this.x + this.w / 2, this.y + this.h / 2);
         ctx.rotate(this.rotation);
-        if (boxType === 'rubber') { // la goma se aplasta al caer y se estira al moverse rápido
+        if (boxKind() === 'rubber') { // la goma se aplasta al caer y se estira al moverse rápido
             const stretch = this.onGround ? 0 : Math.min(0.25, Math.abs(this.vy) * 0.012);
             const sy = 1 - 0.35 * this.squash + stretch, sx = 1 + 0.3 * this.squash - stretch * 0.6;
             ctx.translate(0, (this.h / 2) * (1 - sy));
@@ -992,6 +1166,8 @@ function initPlatforms(startLevel = 1) {
     aim.cancel();
     originY = null; player.rocket = false;
     level = Math.max(1, startLevel);
+    runFirstLevel = level; rubberBoostUsed = false; bombRocket = false;
+    boxType = chosenBox; if (boxType === 'mystery') pickMysteryBehavior(); // la caja elegida vale para los 3 primeros niveles
     cameraScroll = 0;
     platformsInLevel = levelPlatformCount();
     platformsReached = 0; totalPlatformGlobalCount = 0;
@@ -1018,6 +1194,7 @@ function initPlatforms(startLevel = 1) {
     player.onGround = true;
     player.currentPlatform = platforms[0];
     player.bouncesLeft = 2; player.squash = 0;
+    placeOnPlatform();
     setupLava(false);
     populateLevel();
 }
@@ -1081,6 +1258,15 @@ function nextLevel() {
 
     level++;
     setLevelHUD();
+    rubberBoostUsed = false;
+    // Cada 3 niveles la caja cambia al azar (la bomba lo hace al explotar)
+    const wasBombBox = boxKind() === 'bomb';
+    const played = level - runFirstLevel;
+    let boxMsg = '';
+    if (!wasBombBox && played >= BOX_SWAP_EVERY && played % BOX_SWAP_EVERY === 0) {
+        setActiveBox(rollRandomBox(boxType));
+        boxMsg = '\n📦 Nueva caja: ' + boxLabel(boxType);
+    }
 
     // Configuración ambiental según nivel (viento / gravedad; en fases creadas viene del editor)
     rollEnvironment(true);
@@ -1089,8 +1275,8 @@ function nextLevel() {
     platformsReached = 0;
     const lavaNext = isLavaLevel();
     showFeedback("¡NIVEL " + hudLevel() + "!" + (windForce !== 0 ? "\n¡CUIDADO CON EL VIENTO!" : "") + (gravityFactor < 1 ? "\n¡GRAVEDAD BAJA!" : "") +
-        (lavaNext ? "\n🌋 ¡LAVA! Pulsa en CADA pasada de la bola (máx. " + LAVA_MAX_SKIPS + " fallos)" : "") +
-        (boxType === 'bomb' ? "\n💣 Bomba desactivada. Rearmada: " + BOMB_FUSE_SECONDS + " s" : ""));
+        (lavaNext ? "\n🌋 ¡LAVA! Sube cada " + LAVA_RISE_EVERY + " s: no te quedes quieto" : "") +
+        (wasBombBox && boxType !== 'mystery' ? "\n💣 ¡Bomba desactivada!" : "") + boxMsg);
 
     // Guardado automático cada 5 niveles (checkpoint) — solo en la partida normal
     if (gameMode === 'normal' && level % 5 === 0 && window.BJFirebase && window.BJFirebase.isSignedIn()) {
@@ -1148,6 +1334,7 @@ function createExplosion(x, y, multiplier) {
 function computeJump(precision) {
     const { multiplier, tier } = precision;
     if (!player.onGround || multiplier <= 0) return null;
+    if (boxKind() === 'gravity') return computeGravityJump(tier);
     const candidates = platforms.filter(p => p.y < player.y).sort((a, b) => b.y - a.y);
     if (candidates.length === 0) return null;
     const target = candidates[0];
@@ -1184,16 +1371,36 @@ function handleJump(precision) {
 // Simula el salto con la MISMA física del juego (gravedad + viento + paredes + plataformas)
 function simulateJump(j, vx0) {
     let x = player.x, y = player.y, vx = vx0, vy = j.vy;
+    const grav = boxKind() === 'gravity';
     const pts = [];
     let tTarget = null, landing = null;
     for (let step = 1; step <= 500; step++) {
-        const prevBottom = y + player.h;
+        const prevBottom = y + player.h, prevTop = y;
         vx += effWind();
-        vy += effGrav() * gravityFactor;
+        if (grav) vy = Math.max(-GRAV_MAX_V, vy - effGrav() * gravityFactor); else vy += effGrav() * gravityFactor;
         x += vx; y += vy;
-        if (x < 0) { x = 0; if (boxType === 'rubber') vx = Math.abs(vx) * 0.85; }
-        if (x + player.w > width) { x = width - player.w; if (boxType === 'rubber') vx = -Math.abs(vx) * 0.85; }
+        if (x < 0) { x = 0; if (boxKind() === 'rubber') vx = Math.abs(vx) * 0.85; }
+        if (x + player.w > width) { x = width - player.w; if (boxKind() === 'rubber') vx = -Math.abs(vx) * 0.85; }
         const bottom = y + player.h;
+
+        if (grav) { // gravedad invertida: sube y se agarra a la cara inferior
+            const tb = j.target.y + j.target.h;
+            if (tTarget === null && prevTop > tb && y <= tb) tTarget = step;
+            if (step % 2 === 0) pts.push({ x: x + player.w / 2, y: y + player.h / 2 });
+            if (vy < 0) {
+                for (const p of platforms) {
+                    if (p === player.currentPlatform || (p.type === 'flash' && !p.isVisible)) continue;
+                    if (x + player.w > p.x && x < p.x + p.w && y <= p.y + p.h && y >= p.y - 12) {
+                        landing = { x: x + player.w / 2, y: p.y + p.h, onTarget: p === j.target, under: true };
+                        pts.push({ x: landing.x, y: p.y + p.h + player.h / 2 });
+                        break;
+                    }
+                }
+                if (landing) break;
+            }
+            if (y < -400) break;
+            continue;
+        }
 
         if (vy >= 0 && tTarget === null && prevBottom < j.target.y && bottom >= j.target.y) tTarget = step;
         if (step % 2 === 0) pts.push({ x: x + player.w / 2, y: y + player.h / 2 });
@@ -1292,9 +1499,10 @@ const aim = {
         if (land) {
             ctx.strokeStyle = col; ctx.lineWidth = 2;
             ctx.shadowBlur = 12; ctx.shadowColor = col;
-            ctx.strokeRect(land.x - player.w / 2, land.y - player.h, player.w, player.h);
+            const ly = land.under ? land.y : land.y - player.h;
+            ctx.strokeRect(land.x - player.w / 2, ly, player.w, player.h);
             ctx.globalAlpha = 0.15 * pulse + 0.1; ctx.fillStyle = col;
-            ctx.fillRect(land.x - player.w / 2, land.y - player.h, player.w, player.h);
+            ctx.fillRect(land.x - player.w / 2, ly, player.w, player.h);
             ctx.globalAlpha = 1; ctx.shadowBlur = 0;
         } else if (pts.length) {
             const e = pts[pts.length - 1];
@@ -1373,7 +1581,7 @@ function drawWindHUD() {
         ctx.moveTo(px - dir * 5, y - 7); ctx.lineTo(px + dir * 5, y); ctx.lineTo(px - dir * 5, y + 7);
         ctx.stroke();
     }
-    if (boxCfg().wind === 0) { // caja pesada
+    if (boxCfg().wind === 0 && boxType !== 'mystery') { // caja pesada
         ctx.shadowBlur = 0; ctx.globalAlpha = 1; ctx.fillStyle = 'rgba(255,255,255,0.6)';
         ctx.font = 'bold 9px Outfit, Inter, sans-serif';
         ctx.fillText('🔩 IGNORADO', cx, y + 24);
@@ -1382,6 +1590,7 @@ function drawWindHUD() {
 }
 
 function checkCollisions() {
+    const wasOnGround = player.onGround;
     player.onGround = false;
 
     // Colisión Jugador con Obstáculos
@@ -1430,6 +1639,9 @@ function checkCollisions() {
         }
     });
 
+    // Caja de gravedad: se agarra por debajo (lógica propia)
+    if (boxKind() === 'gravity') { gravityCollisions(wasOnGround); return; }
+
     // Colisión Jugador con Plataformas
     platforms.forEach(p => {
         if (p.type === 'flash' && !p.isVisible) return; // "apagada": el jugador la atraviesa
@@ -1440,16 +1652,16 @@ function checkCollisions() {
             const impact = player.vy;
             player.y = p.y - player.h;
             let bounced = false;
-            if (boxType === 'rubber' && impact > 6 && player.bouncesLeft > 0) { // caja de goma: rebota (cada vez menos)
+            if (boxKind() === 'rubber' && impact > 6 && player.bouncesLeft > 0) { // caja de goma: rebota (cada vez menos)
                 bounced = true; player.bouncesLeft--;
                 player.vy = -impact * 0.45; player.vx *= 0.25; player.angularVelocity = 0;
                 player.squash = 1;
                 createExplosion(player.x + player.w / 2, p.y, 0.3);
-            } else if (boxType === 'rubber') {
+            } else if (boxKind() === 'rubber') {
                 player.bouncesLeft = 2;
                 if (impact > 3) player.squash = Math.min(1, impact / 12);
             }
-            if (boxType === 'heavy' && impact > 8) landingBurst(p, '#9aa7ba', 10); // caja pesada: nube de polvo
+            if (boxKind() === 'heavy' && impact > 8) landingBurst(p, '#9aa7ba', 10); // caja pesada: nube de polvo
             player.onGround = !bounced;
             if (player.currentPlatform !== p) {
                 // Al aterrizar en plataforma móvil, anular velocidad lateral (Punto 2)
@@ -1462,7 +1674,7 @@ function checkCollisions() {
                 chests.forEach(c => { if (c.p === p && !c.opened) openChest(c); });
                 // Caja pegajosa: se queda clavada pase lo que pase (inercia, fuerza de salto, tipo de plataforma)
                 let stuck = false;
-                if (boxType === 'sticky') {
+                if (boxKind() === 'sticky') {
                     stuck = true;
                     player.vx = 0; player.angularVelocity = 0;
                     landingBurst(p, '#00ff64', 8);
@@ -1484,7 +1696,11 @@ function checkCollisions() {
                     showFeedback("¡RESORTE! 🚀");
                     createExplosion(p.x + p.w / 2, p.y, 0.8);
                 }
-                if (p.isGoal) nextLevel();
+                if (p.isGoal) {
+                    const wasBomb = boxKind() === 'bomb';
+                    nextLevel();
+                    if (wasBomb && !runEnded) launchBombRocket(); // bomba desactivada: sale disparada
+                }
             }
         }
     });
@@ -1538,7 +1754,7 @@ function landingBurst(p, color, n) {
 
 // ===================== BOMBA: 20 s POR NIVEL =====================
 function updateBombBox(dtSec) {
-    if (boxType !== 'bomb' || runEnded) return;
+    if (boxKind() !== 'bomb' || runEnded) return;
     bombFuse -= dtSec;
     if (bombFuse > 0) return;
     createExplosion(player.x + player.w / 2, player.y + player.h / 2, 2);
@@ -1551,7 +1767,7 @@ function updateBombBox(dtSec) {
     }
 }
 function drawBombRing() {
-    if (boxType !== 'bomb' || runEnded) return;
+    if (boxKind() !== 'bomb' || boxType === 'mystery' || runEnded) return;
     const cx = player.x + player.w / 2, cy = player.y + player.h / 2;
     const k = Math.max(0, bombFuse / BOMB_FUSE_SECONDS);
     ctx.save();
@@ -1568,36 +1784,37 @@ const isLavaLevel = () => (gameMode === 'normal' || gameMode === 'daily') && lev
 function setupLava(silent) {
     lava.active = isLavaLevel();
     lava.skips = 0; lava.doom = false; lava.armed = false;
+    lava.timer = LAVA_RISE_EVERY;
     lava.y = lava.targetY = height + 30; // justo bajo la pantalla
-    if (lava.active && !silent) showFeedback('🌋 ¡NIVEL DE LAVA!\nPulsa en CADA pasada de la bola (máx. ' + LAVA_MAX_SKIPS + ' fallos)');
+    if (lava.active && !silent) showFeedback('🌋 ¡NIVEL DE LAVA!\nCada ' + LAVA_RISE_EVERY + ' s sube un poco por encima de la siguiente plataforma');
 }
 
-// La bola ha cruzado la barra entera sin que se pulsara: la lava sube.
-// Con skips 1..3 sube una parte del camino que la separa de tu caja; el 4º fallo la deja alcanzarte.
-function lavaSkip() {
-    if (!lava.active || !lava.armed || lava.doom || runEnded) return;
-    lava.skips++;
-    if (lava.skips > LAVA_MAX_SKIPS) {
-        lava.doom = true;
-        showFeedback('🌋 ¡LA LAVA TE ALCANZA!');
-        return;
-    }
-    const feet = player.y + player.h;
-    const stepsLeft = (LAVA_MAX_SKIPS + 1) - (lava.skips - 1);
-    lava.targetY += (feet - lava.targetY) / stepsLeft;
-    showFeedback('🌋 ¡LA LAVA SUBE!\nFallos ' + lava.skips + '/' + LAVA_MAX_SKIPS);
+// Ya no depende de la barra: la lava sube sola por tiempo (ver lavaRise).
+function lavaSkip() { /* sin efecto */ }
+
+// Cada LAVA_RISE_EVERY s la lava sube hasta un poco por encima de la plataforma más baja que aún queda libre.
+function lavaRise() {
+    const base = lava.targetY;
+    const next = platforms
+        .filter((p) => !p.isBroken && p.y < base - 2)
+        .sort((a, b) => b.y - a.y)[0];
+    lava.targetY = next ? next.y - 16 : base - 80;
+    showFeedback('🌋 ¡LA LAVA SUBE!');
 }
 
-function updateLava() {
+function updateLava(dtSec = 0) {
     if (!lava.active || runEnded) return;
     lava.t += 0.05;
-    if (lava.doom) lava.y -= 11;                           // sube sin freno hasta pillarte
-    else lava.y += (lava.targetY - lava.y) * 0.06;         // sube suave hacia su nuevo nivel
+    if (lava.armed) {
+        lava.timer -= dtSec;
+        if (lava.timer <= 0) { lava.timer += LAVA_RISE_EVERY; lavaRise(); }
+    }
+    lava.y += (lava.targetY - lava.y) * 0.06;             // sube suave hacia su nuevo nivel
     if (player.y + player.h > lava.y + 6) {
         createExplosion(player.x + player.w / 2, player.y + player.h, 1.5);
         if (hasShield) {
             useShield();
-            lava.skips = 0; lava.doom = false; lava.y = lava.targetY = height + 30;
+            lava.timer = LAVA_RISE_EVERY; lava.y = lava.targetY = height + 30;
             showFeedback('🛡️ ¡EL ESCUDO TE SALVA DE LA LAVA!');
         } else {
             showFeedback('🌋 ¡LA LAVA TE HA PILLADO!');
@@ -1611,7 +1828,7 @@ function drawLava() {
     const top = lava.y;
     ctx.save();
     // resplandor en el borde inferior: más intenso cuantos más fallos
-    const heat = lava.doom ? 0.55 : 0.16 + 0.1 * lava.skips;
+    const heat = 0.16 + 0.4 * (1 - Math.max(0, lava.timer) / LAVA_RISE_EVERY);
     const glow = ctx.createLinearGradient(0, height - 140, 0, height);
     glow.addColorStop(0, 'rgba(255,90,20,0)'); glow.addColorStop(1, `rgba(255,90,20,${heat})`);
     ctx.fillStyle = glow; ctx.fillRect(0, height - 140, width, 140);
@@ -1644,16 +1861,14 @@ function drawStatusHUD() {
     ctx.textAlign = 'center';
     ctx.font = 'bold 12px Outfit, Inter, sans-serif';
     if (lava.active) {
-        const used = Math.min(lava.skips, LAVA_MAX_SKIPS);
-        const danger = lava.doom || used >= LAVA_MAX_SKIPS;
+        const t = Math.max(0, lava.timer);
+        const danger = t < 3;
         const pulse = 0.65 + 0.35 * Math.sin(performance.now() / (danger ? 90 : 220));
         ctx.fillStyle = `rgba(255,${danger ? 70 : 150},40,${pulse})`;
-        let pips = '';
-        for (let i = 0; i < LAVA_MAX_SKIPS; i++) pips += i < used ? '✖ ' : '● ';
-        ctx.fillText(lava.doom ? '🌋 ¡TE ALCANZA!' : '🌋 FALLOS  ' + pips.trim(), width / 2, y);
+        ctx.fillText('🌋 LA LAVA SUBE EN ' + t.toFixed(1) + ' s', width / 2, y);
         y += 20;
     }
-    if (boxType === 'bomb' && !runEnded) {
+    if (boxKind() === 'bomb' && boxType !== 'mystery' && !runEnded) {
         const urgent = bombFuse < 5;
         const pulse = urgent ? 0.6 + 0.4 * Math.sin(performance.now() / 80) : 1;
         ctx.fillStyle = urgent ? `rgba(255,59,47,${pulse})` : 'rgba(255,174,0,0.95)';
@@ -1762,7 +1977,7 @@ function platformBelow() {
         player.x + player.w + 14 > p.x && player.x - 14 < p.x + (p.type === 'temp_full' ? width : p.w));
 }
 function maybeStartRescue() {
-    if (rescue.active || rescue.usedThisLevel || runEnded || hasShield || bombActive) return false;
+    if (rescue.active || rescue.usedThisLevel || runEnded || hasShield || bombActive || boxKind() === 'gravity') return false;
     if (player.onGround || player.vy <= 1) return false;                 // solo cayendo
     if (player.y + player.h < height * RESCUE_TRIGGER) return false;     // aún queda mucha caída
     if (platformBelow()) return false;                                   // hay algo que te recoja
@@ -1910,6 +2125,7 @@ function update() {
     if (rescue.active) { updateRescue(dtMs); updateParticles(); return; } // rescate: mundo congelado
     if (maybeStartRescue()) { updateParticles(); return; }
     player.update();
+    updateBombRocket();
     // Cohete: mientras sube tras un autosalto
     if (player.rocket) {
         if (player.onGround || player.vy > -1) player.rocket = false;
@@ -1917,7 +2133,7 @@ function update() {
     }
     precisionSystem.update();
     updateBombBox(dtMs / 1000);
-    updateLava();
+    updateLava(dtMs / 1000);
 
     // Actualizar entidades
     obstacles = obstacles.filter(obs => obs.update());
@@ -1967,6 +2183,7 @@ function update() {
         lava.y += diff; lava.targetY += diff;
     }
 
+    gravityTopCheck();
     trackHeight();
     updateParticles();
 }
@@ -2100,7 +2317,7 @@ function finishRun(completed) {
 // Vuelve al menú principal (abandona la partida en curso)
 function goToMenu() {
     if (!runEnded && gameMode === 'normal' && window.BJFirebase) window.BJFirebase.reportRun(level, heightCm());
-    runEnded = true; gameActive = false; bombActive = false;
+    runEnded = true; gameActive = false; bombActive = false; bombRocket = false;
     aim.cancel(); cancelReels(); updateInventoryUI();
     resetRescue(); tombstones = []; lava.active = false;
     modeCfg = null; gameMode = 'normal';
@@ -2188,6 +2405,17 @@ const triggerAction = (e) => {
 
     // Medidor de ángulo activo: este toque fija el ángulo y lanza
     if (aim.active) { aim.lock(); return; }
+
+    // Caja de goma: un toque sobre la propia caja (1 vez por nivel) la hace botar como una plataforma-resorte
+    if (boxKind() === 'rubber' && !rubberBoostUsed) {
+        const rect = canvas.getBoundingClientRect();
+        const pt = (e.touches && e.touches.length) ? e.touches[0] : e;
+        const tx = pt.clientX - rect.left, ty = pt.clientY - rect.top, pad = 22;
+        if (tx >= player.x - pad && tx <= player.x + player.w + pad && ty >= player.y - pad && ty <= player.y + player.h + pad) {
+            rubberBoost();
+            return;
+        }
+    }
 
     // Si item plataforma está activo (deprecated por la nueva instrucción de ser instantáneo, 
     // pero lo limpio por si acaso quedaba algo)
@@ -2386,13 +2614,13 @@ function initBoxPicker() {
         });
     }
     function selectBox(key) {
-        boxType = key;
+        chosenBox = key; boxType = key;
         try { localStorage.setItem('boxjump_box_type', key); } catch (e) { /* no disponible */ }
         items.forEach((i) => i.el.classList.toggle('active', i.key === key));
         if (desc) desc.textContent = BOX_TYPES[key].desc;
         paint();
     }
-    selectBox(boxType);
+    selectBox(chosenBox);
     setInterval(() => { if (!startScreen.classList.contains('hidden')) paint(); }, 90); // alas y mechas animadas
 }
 initBoxPicker();

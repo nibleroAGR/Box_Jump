@@ -109,12 +109,13 @@
                     <div class="help-item"><strong>⚡ Power:</strong> Zona verde PERFECT x5 durante 5 turnos.</div>
                     <div class="help-item"><strong>💣 Bomba:</strong> Pausa el juego para explotar una plataforma a elegir.</div>
                     <div class="help-item">
-                        <strong>📦 Cajas (se eligen en el menú principal)</strong>
-                        🔩 <b>Pesada</b> ignora el viento · 🪶 <b>Ligera</b> planea (cae despacio, el viento la empuja más) · 🟣 <b>Goma</b> rebota al caer y en las paredes · 🟢 <b>Pegajosa</b> se pega a la plataforma donde aterriza · 💣 <b>Bomba</b>: 20 s en cada nivel para llegar a la meta o explota.
+                        <strong>📦 Cajas</strong>
+                        Eliges tu caja en el menú, pero solo vale para los 3 primeros niveles. Después cambia al azar cada 3 niveles.<br>
+                        🔩 <b>Pesada</b> ignora el viento · 🪶 <b>Ligera</b> planea (cae despacio, el viento la empuja más) · 🟣 <b>Goma</b> rebota al caer y en las paredes; toca la caja (1 vez por nivel) para que bote como un resorte · 🟢 <b>Pegajosa</b> se pega a la plataforma · 💣 <b>Bomba</b>: 20 s por nivel; si la desactivas sale disparada como un cohete, explota y aparece otra caja · 🔮 <b>Gravedad</b> se cuelga de la parte inferior de las plataformas; si sube hasta el techo, cae sobre la plataforma más cercana · ❓ <b>Misteriosa</b> se comporta como otra caja al azar, sin decirte cuál.
                     </div>
                     <div class="help-item">
                         <strong>🌋 Lava (cada 10 niveles)</strong>
-                        La lava sube cada vez que dejas pasar la bola sin pulsar. Puedes fallar 3 veces; a la cuarta te alcanza.
+                        Cada 8 segundos la lava sube un poco por encima de la siguiente plataforma. No te quedes quieto: si te alcanza, caes.
                     </div>
                     <div class="help-item">
                         <strong>🆘 Rescate</strong>
@@ -151,6 +152,7 @@
                         <div id="box-picker">
                             <p class="box-picker-title">TU CAJA</p>
                             <div id="box-options"></div>
+                            <p class="settings-help">Tu caja solo vale para los 3 primeros niveles; después cambia al azar cada 3.</p>
                             <p id="box-desc" class="settings-help"></p>
                         </div>
                         <div id="menu-buttons">
@@ -239,7 +241,7 @@
             </div>
         </div>
 
-        <script src="game.js?v=19"></script>
+        <script src="game.js?v=20"></script>
 
         <!-- SDK "compat" de Firebase: archivos únicos clásicos, sin import/export
              encadenados, para máxima compatibilidad entre navegadores/dispositivos. -->
