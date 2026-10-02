@@ -475,8 +475,9 @@ const RESCUE_TIME = 1500;          // ms que tarda el aro en cerrarse en cada bo
 const RESCUE_TARGET_R = 30;        // radio del círculo fijo
 const RESCUE_START_R = 112;        // radio inicial del aro que se achica
 const RESCUE_TOL = [12, 10, 8];    // margen de acierto (px) en cada botón: cada vez más exigente
+const RESCUE_CHANCE = 1 / 3;       // probabilidad de que te ofrezcan el rescate al caer (1 de cada 3)
 const RESCUE_TRIGGER = 0.74;       // la caja debe haber caído por debajo de este % de pantalla
-const rescue = { active: false, usedThisLevel: false, phase: 'idle', step: 0, elapsed: 0, btn: null, prev: null, target: null, rise: null };
+const rescue = { active: false, usedThisLevel: false, rolled: false, phase: 'idle', step: 0, elapsed: 0, btn: null, prev: null, target: null, rise: null };
 let chests = [];          // cofres sobre plataformas
 let reels = [];           // rodillos de la tragaperras pendientes de parar
 let reelTimer = null;
@@ -1877,7 +1878,7 @@ function placeTombstone() {
 
 // ===================== RESCATE EN EL ÚLTIMO SEGUNDO (QTE) =====================
 function resetRescue() {
-    rescue.active = false; rescue.usedThisLevel = false; rescue.phase = 'idle';
+    rescue.active = false; rescue.usedThisLevel = false; rescue.rolled = false; rescue.phase = 'idle';
     rescue.step = 0; rescue.elapsed = 0; rescue.btn = null; rescue.prev = null; rescue.target = null; rescue.rise = null;
 }
 const rescueRadius = () => RESCUE_START_R * Math.max(0, 1 - rescue.elapsed / RESCUE_TIME);
@@ -1895,11 +1896,15 @@ function platformBelow() {
         player.x + player.w + 14 > p.x && player.x - 14 < p.x + (p.type === 'temp_full' ? width : p.w));
 }
 function maybeStartRescue() {
+    if (player.onGround) rescue.rolled = false;                          // nueva caída = nueva tirada
     if (rescue.active || rescue.usedThisLevel || runEnded || hasShield || bombActive) return false;
     if (player.onGround || player.vy <= 1) return false;                 // solo cayendo
     if (player.y + player.h < height * RESCUE_TRIGGER) return false;     // aún queda mucha caída
     if (platformBelow()) return false;                                   // hay algo que te recoja
     if (!rescueTarget()) return false;                                   // y debe haber plataforma a la que subir
+    // Una sola tirada por caída: 1 posibilidad entre 3 de que aparezca el tap
+    if (!rescue.rolled) { rescue.rolled = true; if (Math.random() >= RESCUE_CHANCE) return false; }
+    else return false;                                                   // ya se tiró en esta caída y no salió
     rescue.active = true; rescue.usedThisLevel = true;
     rescue.phase = 'qte'; rescue.step = 0; rescue.prev = null;
     rescue.target = rescueTarget();
