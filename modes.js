@@ -108,7 +108,7 @@
     }
 
     $('daily-btn').addEventListener('click', openDaily);
-    $('daily-play-btn').addEventListener('click', playDaily);
+    $('daily-play-btn').addEventListener('click', () => { if (needLogin()) return; G.askStart(playDaily); });
     $('daily-close-btn').addEventListener('click', () => hide($('daily-screen')));
 
     // =================================================================

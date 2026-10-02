@@ -115,7 +115,7 @@
                     </div>
                     <div class="help-item">
                         <strong>🌋 Lava (cada 10 niveles)</strong>
-                        Cada 8 segundos la lava sube un poco por encima de la siguiente plataforma. No te quedes quieto: si te alcanza, caes.
+                        Cada 6 segundos la lava sube un poco por encima de la siguiente plataforma. No te quedes quieto: si te alcanza, caes.
                     </div>
                     <div class="help-item">
                         <strong>🆘 Rescate</strong>
@@ -148,12 +148,6 @@
                         <div id="username-edit-row" class="hidden">
                             <input id="username-input" type="text" maxlength="20" placeholder="Nombre de usuario" />
                             <button id="save-username-btn">✔</button>
-                        </div>
-                        <div id="box-picker">
-                            <p class="box-picker-title">TU CAJA</p>
-                            <div id="box-options"></div>
-                            <p class="settings-help">Tu caja solo vale para los 3 primeros niveles; después cambia al azar cada 3.</p>
-                            <p id="box-desc" class="settings-help"></p>
                         </div>
                         <div id="menu-buttons">
                             <button id="new-game-btn" class="menu-btn">1 · 🎮 NUEVA PARTIDA</button>
@@ -239,9 +233,24 @@
                     </div>
                 </div>
             </div>
+            <!-- ================= ¿CÓMO QUIERES EMPEZAR? (elección de caja) ================= -->
+            <div id="start-choice-screen" class="screen hidden">
+                <div class="glass-card">
+                    <h2>¿CÓMO QUIERES EMPEZAR?</h2>
+                    <div id="box-picker">
+                        <p class="box-picker-title">TU CAJA</p>
+                        <div id="box-options"></div>
+                        <p class="settings-help">Tu caja solo vale para los 3 primeros niveles; después cambia al azar cada 3.</p>
+                        <p id="box-desc" class="settings-help"></p>
+                    </div>
+                    <button id="start-choice-go" type="button">▶ EMPEZAR</button>
+                    <button id="start-choice-back" class="secondary-btn ghost-btn" type="button">Volver</button>
+                </div>
+            </div>
+
         </div>
 
-        <script src="game.js?v=20"></script>
+        <script src="game.js?v=21"></script>
 
         <!-- SDK "compat" de Firebase: archivos únicos clásicos, sin import/export
              encadenados, para máxima compatibilidad entre navegadores/dispositivos. -->
@@ -249,7 +258,7 @@
         <script src="https://www.gstatic.com/firebasejs/10.13.2/firebase-auth-compat.js"></script>
         <script src="https://www.gstatic.com/firebasejs/10.13.2/firebase-firestore-compat.js"></script>
         <script src="backend.js?v=9"></script>
-        <script src="modes.js?v=4"></script>
+        <script src="modes.js?v=5"></script>
     </div>
 </body>
 

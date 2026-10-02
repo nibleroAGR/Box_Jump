@@ -444,8 +444,8 @@ function drawBoxShape(c, type, w, h, t, o = {}) {
 // ===================== LAVA ASCENDENTE (cada 10 niveles) =====================
 const LAVA_EVERY = 10;      // un nivel de lava cada N niveles
 const LAVA_MAX_SKIPS = 3;   // (en desuso) antes: pasadas sin pulsar
-const LAVA_RISE_EVERY = 8;  // segundos entre cada subida de la lava
-const lava = { active: false, y: 0, targetY: 0, skips: 0, doom: false, armed: false, t: 0, timer: 8 };
+const LAVA_RISE_EVERY = 6;  // segundos entre cada subida de la lava
+const lava = { active: false, y: 0, targetY: 0, skips: 0, doom: false, armed: false, t: 0, timer: 6 };
 
 // ===================== LÁPIDAS (muertes de otros jugadores) =====================
 let tombstones = [];
@@ -471,7 +471,7 @@ const TOMB_PHRASES = [
 
 // ===================== RESCATE EN EL ÚLTIMO SEGUNDO =====================
 const RESCUE_STEPS = 3;            // botones seguidos
-const RESCUE_TIME = 3000;          // ms que tarda el aro en cerrarse en cada botón
+const RESCUE_TIME = 1500;          // ms que tarda el aro en cerrarse en cada botón (el doble de rápido)
 const RESCUE_TARGET_R = 30;        // radio del círculo fijo
 const RESCUE_START_R = 112;        // radio inicial del aro que se achica
 const RESCUE_TOL = [12, 10, 8];    // margen de acierto (px) en cada botón: cada vez más exigente
@@ -1882,11 +1882,11 @@ function resetRescue() {
 }
 const rescueRadius = () => RESCUE_START_R * Math.max(0, 1 - rescue.elapsed / RESCUE_TIME);
 
-// Plataforma a la que subirá la caja: la más cercana por encima, sin plataformas con movimiento.
+// Plataforma a la que subirá la caja: la más ALTA de las que se ven en pantalla, sin plataformas con movimiento.
 function rescueTarget() {
     const c = platforms.filter((p) => !p.isBroken && p.type !== 'moving' && p.type !== 'oscillating' &&
-        p.type !== 'flash' && p.type !== 'temp_full' && p.y < player.y);
-    c.sort((a, b) => b.y - a.y);
+        p.type !== 'flash' && p.type !== 'temp_full' && p.y >= 0 && p.y < player.y);
+    c.sort((a, b) => a.y - b.y); // menor y = más arriba
     return c[0] || null;
 }
 function platformBelow() {
@@ -1911,7 +1911,7 @@ function newRescueButton() {
     const bar = precisionSystem.canal, pad = RESCUE_TARGET_R + 30;
     const minX = (precisionSystem.side === 'left' ? bar.x + bar.w + 10 : 0) + pad;
     const maxX = Math.max(minX + 1, (precisionSystem.side === 'right' ? bar.x - 10 : width) - pad);
-    const minY = 250, maxY = Math.max(minY + 1, height * 0.74 - 20);
+    const minY = Math.min(260, height * 0.3), maxY = Math.max(minY + 1, height * 0.78 - 20);
     let x, y, tries = 0;
     do {
         x = minX + Math.random() * (maxX - minX); y = minY + Math.random() * (maxY - minY); tries++;
@@ -2281,11 +2281,11 @@ window.addEventListener('bj-auth-changed', (e) => {
 
 window.addEventListener('resize', resize);
 resize();
-startBtn.addEventListener('click', () => startGame(true));
-if (newGameBtn) newGameBtn.addEventListener('click', () => startGame(false));
+startBtn.addEventListener('click', () => askStart(() => startGame(true)));
+if (newGameBtn) newGameBtn.addEventListener('click', () => askStart(() => startGame(false)));
 restartBtn.addEventListener('click', () => (modeCfg ? startGame(false, modeCfg) : startGame(true)));
 if (goMenuBtn) goMenuBtn.addEventListener('click', goToMenu);
-if (gameOverNewBtn) gameOverNewBtn.addEventListener('click', () => startGame(false));
+if (gameOverNewBtn) gameOverNewBtn.addEventListener('click', () => askStart(() => startGame(false)));
 
 const triggerAction = (e) => {
     // Si item bomba está activo (especial: el juego está pausado)
@@ -2500,13 +2500,24 @@ window.addEventListener('keydown', (e) => {
 // API pública para modes.js (fase diaria y creador)
 window.BJGame = {
     start: (cfg) => startGame(false, cfg),
+    askStart: (cb) => askStart(cb),
     exit: exitRun,
     toMenu: goToMenu,
     mapX,
     getSide: () => precisionSystem.side,
 };
 
-// --- Selector de caja (menú principal) ---
+// --- "¿Cómo quieres empezar?": se muestra DESPUÉS de pulsar el modo de juego ---
+function askStart(onGo) {
+    const scr = document.getElementById('start-choice-screen');
+    if (!scr) { onGo(); return; }
+    const go = document.getElementById('start-choice-go'), back = document.getElementById('start-choice-back');
+    scr.classList.remove('hidden');
+    go.onclick = () => { scr.classList.add('hidden'); onGo(); };
+    back.onclick = () => scr.classList.add('hidden');
+}
+
+// --- Selector de caja (pantalla "¿Cómo quieres empezar?") ---
 function initBoxPicker() {
     const wrap = document.getElementById('box-options'), desc = document.getElementById('box-desc');
     if (!wrap) return;
@@ -2538,7 +2549,8 @@ function initBoxPicker() {
         paint();
     }
     selectBox(chosenBox);
-    setInterval(() => { if (!startScreen.classList.contains('hidden')) paint(); }, 90); // alas y mechas animadas
+    const choiceScreen = document.getElementById('start-choice-screen');
+    setInterval(() => { if (choiceScreen && !choiceScreen.classList.contains('hidden')) paint(); }, 90); // alas y mechas animadas
 }
 initBoxPicker();
 
