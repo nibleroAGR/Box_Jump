@@ -153,15 +153,20 @@ function populateLevel() {
     placeTombstone();
 }
 
+// Menú de inicio: por defecto "Nueva partida". Si ya hay un checkpoint (nivel 5, 10, 15...) se muestra
+// "Continuar" y desaparece "Nueva partida" (solo se puede empezar de cero desde Configuración, con confirmación).
 function updateStartScreenUI() {
     const hasCheckpoint = !!(savedGameData && savedGameData.level > 1);
     if (startBtn) {
-        startBtn.innerText = hasCheckpoint ? `▶ CONTINUAR (Nivel ${savedGameData.level})` : '▶ CONTINUAR (sin partida guardada)';
+        startBtn.innerText = hasCheckpoint ? `1 · ▶ CONTINUAR (Nivel ${savedGameData.level})` : '1 · ▶ CONTINUAR';
+        startBtn.classList.toggle('hidden', !hasCheckpoint);
         startBtn.disabled = !hasCheckpoint;
     }
-    if (newGameBtn) newGameBtn.classList.remove('hidden');
+    if (newGameBtn) newGameBtn.classList.toggle('hidden', hasCheckpoint);
     if (restartBtn) restartBtn.innerText = hasCheckpoint ? `CONTINUAR (Nivel ${savedGameData.level})` : 'REINTENTAR';
-    if (gameOverNewBtn) gameOverNewBtn.classList.toggle('hidden', !hasCheckpoint);
+    if (gameOverNewBtn) gameOverNewBtn.classList.add('hidden'); // empezar de cero solo desde Configuración
+    const ngs = document.getElementById('settings-newgame-section');
+    if (ngs && !hasCheckpoint) ngs.classList.add('hidden');
 }
 
 function updateHeightDisplay() {
@@ -1376,7 +1381,8 @@ function nextLevel() {
         (wasBombBox && boxType !== 'mystery' ? "\n💣 ¡Bomba desactivada!" : "") + boxMsg);
 
     // Guardado automático cada 5 niveles (checkpoint) — solo en la partida normal
-    if (gameMode === 'normal' && level % 5 === 0 && window.BJFirebase && window.BJFirebase.isSignedIn()) {
+    if (gameMode === 'normal' && level % 5 === 0 && window.BJFirebase && window.BJFirebase.isSignedIn() &&
+        !(savedGameData && savedGameData.level >= level)) { // nunca se pisa un progreso más avanzado
         window.BJFirebase.saveProgress(level);
         savedGameData = { level };
         updateStartScreenUI();
@@ -2534,7 +2540,6 @@ function finishRun(completed) {
     goNote.classList.toggle('hidden', !info.note);
     if (modeCfg) {
         restartBtn.innerText = info.retryText || 'REINTENTAR';
-        gameOverNewBtn.classList.add('hidden');
     }
     goPrimaryBtn.classList.toggle('hidden', !info.primary);
     if (info.primary) {
@@ -2599,7 +2604,6 @@ startBtn.addEventListener('click', () => askStart(() => startGame(true)));
 if (newGameBtn) newGameBtn.addEventListener('click', () => askStart(() => startGame(false)));
 restartBtn.addEventListener('click', () => (modeCfg ? startGame(false, modeCfg) : startGame(true)));
 if (goMenuBtn) goMenuBtn.addEventListener('click', goToMenu);
-if (gameOverNewBtn) gameOverNewBtn.addEventListener('click', () => askStart(() => startGame(false)));
 
 const triggerAction = (e) => {
     // Si item bomba está activo (especial: el juego está pausado)
@@ -2814,12 +2818,49 @@ setBarSide(savedSide, false);
 if (sideLeftBtn) sideLeftBtn.addEventListener('click', () => setBarSide('left'));
 if (sideRightBtn) sideRightBtn.addEventListener('click', () => setBarSide('right'));
 
+// "Nueva partida" solo aparece en Configuración abierta desde el inicio y si hay una partida guardada
+function setNewGameSection(show) {
+    const s = document.getElementById('settings-newgame-section');
+    if (s) s.classList.toggle('hidden', !(show && savedGameData && savedGameData.level > 1));
+}
 if (settingsFab) settingsFab.addEventListener('click', () => {
     setMenuOpen(false);
     settingsWasPlaying = gameActive;
     gameActive = false;
+    setNewGameSection(false);
     settingsModal.classList.remove('hidden');
 });
+const menuSettingsBtn = document.getElementById('menu-settings-btn');
+if (menuSettingsBtn) menuSettingsBtn.addEventListener('click', () => {
+    settingsWasPlaying = false;
+    setNewGameSection(true);
+    settingsModal.classList.remove('hidden');
+});
+(function () { // confirmación antes de borrar el progreso
+    const modal = document.getElementById('confirm-new-modal');
+    const openBtn = document.getElementById('settings-newgame-btn');
+    const yes = document.getElementById('confirm-new-yes'), no = document.getElementById('confirm-new-no');
+    if (!modal || !openBtn || !yes || !no) return;
+    openBtn.addEventListener('click', () => {
+        document.getElementById('confirm-new-level').textContent = 'nivel ' + ((savedGameData && savedGameData.level) || 1);
+        modal.classList.remove('hidden');
+    });
+    no.addEventListener('click', () => modal.classList.add('hidden'));
+    yes.addEventListener('click', () => {
+        modal.classList.add('hidden');
+        settingsModal.classList.add('hidden');
+        // Se elige la caja y, solo al pulsar EMPEZAR, se borra la partida guardada y se arranca de cero
+        askStart(() => {
+            savedGameData = null;
+            if (window.BJFirebase && window.BJFirebase.resetProgress) window.BJFirebase.resetProgress();
+            updateStartScreenUI();
+            startGame(false);
+        });
+    });
+})();
+const cupGeneralBtn = document.getElementById('cup-general-btn'), cupDailyBtn = document.getElementById('cup-daily-btn');
+if (cupGeneralBtn) cupGeneralBtn.addEventListener('click', () => window.BJFirebase && window.BJFirebase.openRanking('general'));
+if (cupDailyBtn) cupDailyBtn.addEventListener('click', () => window.BJFirebase && window.BJFirebase.openRanking('daily'));
 if (closeSettingsBtn) closeSettingsBtn.addEventListener('click', () => {
     settingsModal.classList.add('hidden');
     if (settingsWasPlaying) gameActive = true;

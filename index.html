@@ -6,7 +6,7 @@
     <meta name="viewport"
         content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
     <title>Box Jump Precision</title>
-    <link rel="stylesheet" href="style.css?v=19">
+    <link rel="stylesheet" href="style.css?v=20">
 </head>
 
 <body>
@@ -47,11 +47,7 @@
             </div>
             <div id="ranking-modal" class="screen hidden">
                 <div class="glass-card ranking-card">
-                    <h2>CLASIFICACIÓN</h2>
-                    <div class="ranking-tabs scope-tabs">
-                        <button id="scope-daily" class="rank-tab">📅 HOY</button>
-                        <button id="scope-general" class="rank-tab active">🏆 GENERAL</button>
-                    </div>
+                    <h2 id="ranking-title">CLASIFICACIÓN</h2>
                     <div class="ranking-tabs">
                         <button id="tab-global" class="rank-tab active">🌍 GLOBAL</button>
                         <button id="tab-friends" class="rank-tab">👥 AMIGOS</button>
@@ -87,6 +83,16 @@
                         <p id="settings-msg" class="settings-msg hidden"></p>
                     </div>
                     <div class="settings-section">
+                        <h3>Añadir amigo</h3>
+                        <p class="settings-help">Escribe el código de tu amigo para ver su clasificación.</p>
+                        <div class="settings-row">
+                            <input id="settings-friend-input" class="settings-input" type="text" maxlength="40"
+                                placeholder="Código de amigo" autocomplete="off" autocapitalize="off" />
+                            <button id="settings-friend-btn" type="button">AÑADIR</button>
+                        </div>
+                        <p id="settings-friend-msg" class="settings-msg hidden"></p>
+                    </div>
+                    <div class="settings-section">
                         <h3>Barra de precisión</h3>
                         <div class="side-toggle">
                             <button id="side-left" class="side-btn" type="button">◀ IZQUIERDA</button>
@@ -99,6 +105,11 @@
                             <button id="snd-music" class="side-btn active" type="button">🎵 MÚSICA: SÍ</button>
                             <button id="snd-sfx" class="side-btn active" type="button">🔊 EFECTOS: SÍ</button>
                         </div>
+                    </div>
+                    <div id="settings-newgame-section" class="settings-section hidden">
+                        <h3>Nueva partida</h3>
+                        <p class="settings-help">Empieza desde el nivel 1. Perderás tu partida guardada.</p>
+                        <button id="settings-newgame-btn" class="danger-btn" type="button">🎮 EMPEZAR NUEVA PARTIDA</button>
                     </div>
                     <button id="close-settings-btn" type="button">CERRAR</button>
                 </div>
@@ -163,11 +174,21 @@
                             <button id="save-username-btn">✔</button>
                         </div>
                         <div id="menu-buttons">
-                            <button id="new-game-btn" class="menu-btn">1 · 🎮 NUEVA PARTIDA</button>
-                            <button id="start-btn" class="menu-btn">2 · ▶ CONTINUAR</button>
-                            <button id="daily-btn" class="menu-btn">3 · 📅 FASE DIARIA</button>
-                            <button id="creator-btn" class="menu-btn">4 · 🛠 CREADOR</button>
-                            <button id="ranking-btn" class="menu-btn">5 · 🏆 RANKING</button>
+                            <div class="menu-row" id="row-play">
+                                <button id="new-game-btn" class="menu-btn">1 · 🎮 NUEVA PARTIDA</button>
+                                <button id="start-btn" class="menu-btn hidden">1 · ▶ CONTINUAR</button>
+                                <button id="cup-general-btn" class="cup-btn" type="button" title="Ranking general" aria-label="Ranking general">🏆</button>
+                            </div>
+                            <div class="menu-row">
+                                <button id="daily-btn" class="menu-btn">2 · 📅 FASE DIARIA</button>
+                                <button id="cup-daily-btn" class="cup-btn" type="button" title="Ranking de la fase diaria" aria-label="Ranking de la fase diaria">🏆</button>
+                            </div>
+                            <div class="menu-row">
+                                <button id="creator-btn" class="menu-btn">3 · 🛠 CREADOR</button>
+                            </div>
+                            <div class="menu-row">
+                                <button id="menu-settings-btn" class="menu-btn">4 · ⚙️ CONFIGURACIÓN</button>
+                            </div>
                         </div>
                         <p id="trophy-banner" class="trophy-banner hidden"></p>
                         <button id="signout-btn" class="secondary-btn ghost-btn">Cerrar sesión</button>
@@ -263,6 +284,16 @@
                 </div>
             </div>
 
+            <!-- ================= CONFIRMAR NUEVA PARTIDA ================= -->
+            <div id="confirm-new-modal" class="screen hidden">
+                <div class="glass-card">
+                    <h2>¿NUEVA PARTIDA?</h2>
+                    <p class="settings-help">Si empiezas una nueva partida <strong>perderás tu progreso guardado</strong> (<span id="confirm-new-level">nivel 1</span>) y volverás al nivel 1. Esta acción no se puede deshacer.</p>
+                    <button id="confirm-new-yes" class="danger-btn" type="button">SÍ, EMPEZAR DE NUEVO</button>
+                    <button id="confirm-new-no" class="secondary-btn ghost-btn" type="button">Cancelar</button>
+                </div>
+            </div>
+
             <!-- ================= NUEVA CAJA (primera vez que aparece) ================= -->
             <div id="box-intro-modal" class="screen hidden">
                 <div class="glass-card">
@@ -277,14 +308,14 @@
         </div>
 
         <script src="audio.js?v=1"></script>
-        <script src="game.js?v=25"></script>
+        <script src="game.js?v=26"></script>
 
         <!-- SDK "compat" de Firebase: archivos únicos clásicos, sin import/export
              encadenados, para máxima compatibilidad entre navegadores/dispositivos. -->
         <script src="https://www.gstatic.com/firebasejs/10.13.2/firebase-app-compat.js"></script>
         <script src="https://www.gstatic.com/firebasejs/10.13.2/firebase-auth-compat.js"></script>
         <script src="https://www.gstatic.com/firebasejs/10.13.2/firebase-firestore-compat.js"></script>
-        <script src="backend.js?v=10"></script>
+        <script src="backend.js?v=11"></script>
         <script src="modes.js?v=5"></script>
     </div>
 </body>

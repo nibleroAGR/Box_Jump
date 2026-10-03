@@ -1153,3 +1153,22 @@ button:disabled { opacity: 0.35; pointer-events: none; filter: grayscale(0.6); }
 .trophy-banner { margin: 0.6rem 0 0; padding: 0.5rem 0.7rem; border-radius: 10px; font-size: 0.78rem; line-height: 1.5;
     background: rgba(255, 215, 0, 0.1); border: 1px solid rgba(255, 215, 0, 0.35); color: #ffe9a3; }
 .trophy-banner.hidden { display: none; }
+
+/* Menú de inicio: cada modo con su copa (ranking) a la derecha */
+.menu-row { display: flex; align-items: stretch; gap: 0.5rem; margin-top: 0.6rem; }
+.menu-row .menu-btn { flex: 1; margin-top: 0; min-width: 0; }
+.cup-btn { flex: 0 0 54px; width: 54px; padding: 0; margin: 0; font-size: 1.5rem; line-height: 1; border-radius: 14px;
+    background: linear-gradient(135deg, rgba(255, 215, 0, 0.22), rgba(255, 174, 0, 0.12));
+    border: 1px solid rgba(255, 215, 0, 0.45); color: #ffd700; box-shadow: none; }
+.cup-btn:active { transform: scale(0.94); }
+#menu-settings-btn { background: linear-gradient(135deg, #2b3a5c, #1a2540); color: #dbe6ff; box-shadow: none; border: 1px solid var(--border); }
+.menu-row .menu-btn.hidden, .menu-row .menu-btn[hidden] { display: none; }
+
+/* Configuración y confirmación por encima de las demás pantallas */
+#settings-modal { z-index: 250; }
+#confirm-new-modal { z-index: 255; background: rgba(5, 11, 24, 0.94); backdrop-filter: blur(14px); }
+#confirm-new-modal .glass-card { max-width: 340px; width: 90%; padding: 1.4rem 1.2rem; }
+.danger-btn { background: linear-gradient(135deg, #ff4d4d, #b30000) !important; color: #fff !important;
+    box-shadow: 0 8px 18px rgba(255, 60, 60, 0.25) !important; }
+#settings-newgame-section { border-top: 1px solid rgba(255, 90, 90, 0.35); padding-top: 0.8rem; }
+#settings-newgame-section h3 { color: #ff8a8a; }

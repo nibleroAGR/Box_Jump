@@ -79,9 +79,10 @@
         closeRankingBtn: $('close-ranking-btn'),
         tabGlobal: $('tab-global'),
         tabFriends: $('tab-friends'),
-        scopeDaily: $('scope-daily'),
-        scopeGeneral: $('scope-general'),
-        rankingBtn: $('ranking-btn'),
+        rankingTitle: $('ranking-title'),
+        settingsFriendInput: $('settings-friend-input'),
+        settingsFriendBtn: $('settings-friend-btn'),
+        settingsFriendMsg: $('settings-friend-msg'),
         rankingNote: $('ranking-note'),
         trophyBar: $('trophy-bar'),
         trophyBanner: $('trophy-banner'),
@@ -327,6 +328,13 @@
         }
     }
 
+    // Nueva partida confirmada: se borra el checkpoint guardado
+    async function resetProgress() {
+        if (!currentUser) return;
+        try { await users().doc(currentUser.uid).update({ savedGame: null }); }
+        catch (err) { console.error('No se pudo borrar el progreso:', err); }
+    }
+
     async function saveProgress(level) {
         if (!currentUser) return;
         try {
@@ -456,8 +464,6 @@
         const isGlobal = activeRankingTab === 'global';
         const daily = activeRankingScope === 'daily';
         dom.addFriendRow.classList.toggle('hidden', isGlobal);
-        if (dom.scopeDaily) dom.scopeDaily.classList.toggle('active', daily);
-        if (dom.scopeGeneral) dom.scopeGeneral.classList.toggle('active', !daily);
         if (dom.rankingNote) {
             dom.rankingNote.textContent = daily
                 ? `Fase diaria de hoy (${dailyKey()}). Las copas de oro, plata y bronce solo se dan con ${MIN_PLAYERS_FOR_CUP} jugadores o más.`
@@ -478,7 +484,13 @@
         }
     }
 
-    function openRankingModal() {
+    // scope: 'daily' (fase diaria de hoy) o 'general'. Siempre se abre en GLOBAL; el jugador cambia a AMIGOS.
+    function openRankingModal(scope) {
+        activeRankingScope = scope === 'daily' ? 'daily' : 'general';
+        activeRankingTab = 'global';
+        dom.tabGlobal.classList.add('active');
+        dom.tabFriends.classList.remove('active');
+        if (dom.rankingTitle) dom.rankingTitle.textContent = activeRankingScope === 'daily' ? '📅 FASE DIARIA · HOY' : '🏆 CLASIFICACIÓN GENERAL';
         dom.rankingModal.classList.remove('hidden');
         window.__bjOpenRanking && window.__bjOpenRanking();
         refreshRankingView();
@@ -583,10 +595,7 @@
     dom.googleBtn.addEventListener('click', signIn);
     dom.signoutBtn.addEventListener('click', signOutUser);
 
-    dom.rankingFab.addEventListener('click', openRankingModal);
-    if (dom.rankingBtn) dom.rankingBtn.addEventListener('click', openRankingModal); // botón de la pantalla de inicio
-    if (dom.scopeDaily) dom.scopeDaily.addEventListener('click', () => { activeRankingScope = 'daily'; refreshRankingView(); });
-    if (dom.scopeGeneral) dom.scopeGeneral.addEventListener('click', () => { activeRankingScope = 'general'; refreshRankingView(); });
+    dom.rankingFab.addEventListener('click', () => openRankingModal('general'));
     dom.closeRankingBtn.addEventListener('click', closeRankingModal);
 
     dom.tabGlobal.addEventListener('click', () => {
@@ -601,6 +610,23 @@
         dom.tabGlobal.classList.remove('active');
         refreshRankingView();
     });
+
+    function showFriendMsg(text, ok) {
+        if (!dom.settingsFriendMsg) return;
+        dom.settingsFriendMsg.innerText = text || '';
+        dom.settingsFriendMsg.style.color = ok ? '#5dffb0' : '#ff6b6b';
+        dom.settingsFriendMsg.classList.toggle('hidden', !text);
+    }
+    if (dom.settingsFriendBtn) {
+        dom.settingsFriendBtn.addEventListener('click', async () => {
+            dom.settingsFriendBtn.disabled = true;
+            const res = await addFriendByCode(dom.settingsFriendInput.value);
+            dom.settingsFriendBtn.disabled = false;
+            showFriendMsg(res.ok ? 'Amigo añadido ✔' : res.msg, res.ok);
+            if (res.ok) dom.settingsFriendInput.value = '';
+        });
+        dom.settingsFriendInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') dom.settingsFriendBtn.click(); });
+    }
 
     dom.addFriendBtn.addEventListener('click', async () => {
         dom.addFriendBtn.disabled = true;
@@ -870,7 +896,8 @@
         isSignedIn: () => !!currentUser,
         promptSignIn: () => dom.googleBtn.click(),
         reportRun,
-        saveProgress,
+        saveProgress, resetProgress,
+        openRanking: (scope) => openRankingModal(scope),
         uid: () => (currentUser ? currentUser.uid : null),
         reportDaily, getDailyTop, getMyDaily, getDailyFriends, checkTrophies,
         reportDeath, getDeaths,
