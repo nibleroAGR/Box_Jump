@@ -210,6 +210,7 @@
                 bestRank: RANK_BASE, // = bestLevel * RANK_BASE + bestHeight (permite ordenar sin índice compuesto)
                 friends: [],
                 savedGame: null,
+                checkpointFromRank: true, // perfil nuevo: no necesita la corrección de versiones anteriores
                 createdAt: firebase.firestore.FieldValue.serverTimestamp(),
                 updatedAt: firebase.firestore.FieldValue.serverTimestamp(),
             };
@@ -240,6 +241,18 @@
             patch.bestLevel = data.bestLevel || 1;
             patch.bestHeight = data.bestHeight || 0;
             patch.bestRank = patch.bestLevel * RANK_BASE + patch.bestHeight;
+        }
+        // Corrección única (versiones anteriores): si el ranking dice que llegó más lejos que la
+        // partida guardada, se le deja continuar desde el último checkpoint (múltiplo de 5) de ese nivel.
+        // Ej.: partida en nivel 10 y ranking en nivel 24 -> "Continuar (Nivel 20)". Solo se hace una vez.
+        if (!data.checkpointFromRank) {
+            const rankLevel = patch.bestLevel || data.bestLevel || 1;
+            const rankCheckpoint = Math.floor(rankLevel / 5) * 5;
+            const savedLevel = (data.savedGame && data.savedGame.level) || 0;
+            if (rankCheckpoint >= 5 && rankCheckpoint > savedLevel) {
+                patch.savedGame = { level: rankCheckpoint, updatedAt: Date.now() };
+            }
+            patch.checkpointFromRank = true;
         }
         await ref.update(patch);
         return { ...data, ...patch };
