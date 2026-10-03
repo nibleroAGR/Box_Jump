@@ -115,10 +115,12 @@ function rollEnvironment(allowGravity) {
         const d = customLevelData();
         windForce = (d.wind || 0) * 0.028;
         gravityFactor = d.lowG ? 0.4 : 1.0;
+        darkLevel = false;
         return;
     }
     windForce = rollWind(genRng);
     gravityFactor = (allowGravity && level >= 30 && genRng() < 0.3) ? 0.4 : 1.0; // Baja gravedad ocasional en modo Caos
+    darkLevel = level >= 2 && genRng() < DARK_CHANCE; // niebla: 10 % de probabilidad por nivel
 }
 function buildCustomLevel() {
     const d = customLevelData();
@@ -208,10 +210,16 @@ let combo = 0;
 let maxCombo = 0;
 let windForce = 0;
 let gravityFactor = 1.0;
+const DARK_CHANCE = 0.10;   // probabilidad de que el siguiente nivel sea de niebla
+const DARK_RADIUS = 105;    // radio (px) que se ilumina alrededor de la caja
+let darkLevel = false;      // nivel oscuro: solo se ve un radio reducido alrededor de la caja
 
-// Viento (nivel >= 12): dirección aleatoria e intensidad mínima para que siempre se note
+// Viento (nivel >= 12): en cada nivel hay un 20 % de probabilidad de que sople.
+// Dirección aleatoria e intensidad mínima para que siempre se note
+const WIND_CHANCE = 0.2;
 function rollWind(R = Math.random) {
     if (level < 12) return 0;
+    if (R() >= WIND_CHANCE) return 0;
     return (R() < 0.5 ? -1 : 1) * (0.025 + R() * 0.055);
 }
 let hasShield = false;
@@ -235,17 +243,34 @@ const BOX_TYPES = {
     rubber: { name: 'Goma',     wind: 1,   grav: 1,   desc: 'Rebota al caer y en las paredes. Toca la caja (1 vez por nivel) y bota como un resorte.' },
     sticky: { name: 'Pegajosa', wind: 1,   grav: 1,   desc: 'Se pega a la plataforma donde aterriza, sea cual sea la inercia o el tipo de plataforma.' },
     bomb:   { name: 'Bomba',    wind: 1,   grav: 1,   desc: 'Tienes 20 s por nivel para llegar a la meta. Si la desactivas, sale disparada como un cohete, explota y aparece otra caja.' },
-    psychedelic: { name: 'Psicodélica', wind: 1, grav: 1, desc: 'Zona verde al 33 % de la barra, pero la bola desaparece de la mitad de la pantalla hacia abajo. Si aciertas el verde (aunque no la veas) saltas directo a la 3.ª plataforma por encima (sin contar las móviles) o, si no hay tantas, a la del siguiente nivel.' },
+    gravity: { name: 'Gravitatoria', wind: 1, grav: 1, desc: 'Toca la caja (1 vez por nivel) y la gravedad del nivel se invierte durante 3 s: la caja flota hacia arriba.' },
     mystery: { name: 'Misteriosa', wind: 1, grav: 1,  desc: 'Se comporta como otra caja al azar... pero no te dice cuál.' },
 };
 const BOMB_FUSE_SECONDS = 20;
+// Desbloqueo: se empieza solo con la clásica; las demás se desbloquean al aparecer en una partida
+let unlockedBoxes = ['normal'];
+try {
+    const u = JSON.parse(localStorage.getItem('boxjump_unlocked_boxes') || 'null');
+    if (Array.isArray(u)) unlockedBoxes = Array.from(new Set(['normal', ...u.filter((k) => BOX_TYPES[k])]));
+} catch (e) { /* no disponible */ }
+const isUnlocked = (k) => unlockedBoxes.includes(k);
+function unlockBox(k) { // devuelve true si era nueva
+    if (isUnlocked(k)) return false;
+    unlockedBoxes.push(k);
+    try { localStorage.setItem('boxjump_unlocked_boxes', JSON.stringify(unlockedBoxes)); } catch (e) { /* no disponible */ }
+    return true;
+}
 let chosenBox = 'normal';   // la que eliges en el menú: solo vale para los 3 primeros niveles
-try { const sb = localStorage.getItem('boxjump_box_type'); if (sb && BOX_TYPES[sb]) chosenBox = sb; } catch (e) { /* no disponible */ }
+try { const sb = localStorage.getItem('boxjump_box_type'); if (sb && BOX_TYPES[sb] && isUnlocked(sb)) chosenBox = sb; } catch (e) { /* no disponible */ }
 let boxType = chosenBox;    // la caja activa ahora mismo (cambia sola cada 3 niveles)
 let mysteryAs = 'normal';   // comportamiento real de la caja misteriosa
 const BOX_SWAP_EVERY = 3;   // niveles que dura cada caja al azar
-const PSY_GREEN = 0.33;     // caja psicodélica: la zona verde ocupa el 33 % de la barra de precisión
-const PSY_JUMP_PLATFORMS = 3; // caja psicodélica: con el verde salta a la 3.ª plataforma por encima
+// Caja gravitatoria: al tocarla invierte la gravedad del nivel durante 3 s (1 vez por nivel)
+const GRAV_FLIP_MS = 3000;
+const GRAV_FLIP_MAX_VY = 5;  // velocidad máxima de ascenso mientras dura la inversión (px/frame)
+let gravFlipT = 0;           // ms que le quedan a la inversión
+let gravBoostUsed = false;   // ya usada en este nivel
+let frameDtMs = 16;          // duración del último fotograma (la usan los drones)
 let runFirstLevel = 1;      // primer nivel de la partida en curso
 let rubberBoostUsed = false; // bote de la caja de goma (1 por nivel)
 let bombRocket = false;     // la bomba desactivada vuela como un cohete
@@ -270,8 +295,10 @@ function pickMysteryBehavior() {
 }
 function setActiveBox(key) {
     boxType = key;
+    gravFlipT = 0;
     if (key === 'mystery') pickMysteryBehavior();
     placeOnPlatform();
+    if (unlockBox(key)) showBoxIntro(key); // primera vez que aparece: cuadro informativo
 }
 // Coloca la caja sobre la plataforma en la que está
 function placeOnPlatform() {
@@ -281,15 +308,13 @@ function placeOnPlatform() {
     player.vy = 0;
 }
 
-// --- Caja psicodélica: con el verde salta a la 3.ª plataforma por encima (sin contar las móviles) ---
-// Si no hay tantas, va a la plataforma del siguiente nivel (la meta).
-function psychedelicTarget() {
-    const ok = (p) => p.y < player.y && !p.isBroken && p.type !== 'moving' && p.type !== 'oscillating' &&
-        !(p.type === 'flash' && !p.isVisible);
-    const cands = platforms.filter(ok).sort((a, b) => b.y - a.y); // de la más cercana a la más alta
-    if (!cands.length) return null;
-    if (cands.length >= PSY_JUMP_PLATFORMS) return cands[PSY_JUMP_PLATFORMS - 1];
-    return platforms.find((p) => p.isGoal) || cands[cands.length - 1];
+// --- Caja gravitatoria: un toque sobre ella (1 vez por nivel) invierte la gravedad durante 3 s ---
+function gravityFlip() {
+    gravBoostUsed = true; gravFlipT = GRAV_FLIP_MS;
+    if (player.onGround) { player.onGround = false; player.vy = -3; } // se despega de la plataforma
+    player.straightBounce = false;
+    showFeedback('🌀 ¡GRAVEDAD INVERTIDA! 3 s');
+    createExplosion(player.x + player.w / 2, player.y + player.h / 2, 0.8);
 }
 
 // --- Caja bomba: al desactivarla sale disparada como un cohete, explota y aparece otra caja ---
@@ -397,28 +422,23 @@ function drawBoxShape(c, type, w, h, t, o = {}) {
             }
             break;
         }
-        case 'psychedelic': { // colores que giran sin parar y una espiral hipnótica
-            const hue = (t * 0.12) % 360;
-            c.shadowBlur = 16; c.shadowColor = `hsl(${hue},100%,60%)`;
-            const g = c.createLinearGradient(x, y, x + w, y + h);
-            g.addColorStop(0, `hsl(${hue},100%,58%)`);
-            g.addColorStop(0.5, `hsl(${(hue + 120) % 360},100%,58%)`);
-            g.addColorStop(1, `hsl(${(hue + 240) % 360},100%,58%)`);
-            c.fillStyle = g; c.fillRect(x, y, w, h);
+        case 'gravity': { // violeta con flechas arriba/abajo; brilla en cian mientras la gravedad está invertida
+            const on = !!o.flip;
+            c.shadowBlur = on ? 22 : 12; c.shadowColor = on ? '#7df9ff' : '#8a5bff';
+            const gr = c.createLinearGradient(0, y, 0, y + h);
+            gr.addColorStop(0, '#5b3df5'); gr.addColorStop(1, '#1b1450');
+            c.fillStyle = gr; c.fillRect(x, y, w, h);
             c.shadowBlur = 0;
-            c.save();
-            c.beginPath(); c.rect(x + 2, y + 2, w - 4, h - 4); c.clip();
-            c.strokeStyle = 'rgba(255,255,255,0.85)'; c.lineWidth = Math.max(1.5, w * 0.06); c.lineCap = 'round';
-            c.beginPath();
-            const turns = 3.2 * Math.PI * 2, rot = t * 0.004, maxR = Math.max(w, h) * 0.7;
-            for (let a = 0; a <= turns; a += 0.25) {
-                const r = (a / turns) * maxR;
-                const px = Math.cos(a + rot) * r, py = Math.sin(a + rot) * r;
-                if (a === 0) c.moveTo(px, py); else c.lineTo(px, py);
-            }
-            c.stroke();
-            c.restore();
-            c.strokeStyle = `hsl(${(hue + 180) % 360},100%,85%)`; c.lineWidth = 2; c.strokeRect(x + 1, y + 1, w - 2, h - 2);
+            c.strokeStyle = on ? '#7df9ff' : '#b79cff'; c.lineWidth = 2; c.strokeRect(x + 2, y + 2, w - 4, h - 4);
+            const s = Math.max(3, w * 0.14), ay = h * 0.22;
+            c.fillStyle = on ? '#7df9ff' : '#e6dcff';
+            // flecha hacia arriba (izquierda)
+            c.beginPath(); c.moveTo(-w * 0.2, y + ay); c.lineTo(-w * 0.2 - s, y + ay + s * 1.6); c.lineTo(-w * 0.2 + s, y + ay + s * 1.6); c.closePath(); c.fill();
+            c.fillRect(-w * 0.2 - 1, y + ay + s * 1.6, 2, h * 0.3);
+            // flecha hacia abajo (derecha)
+            c.fillStyle = on ? 'rgba(125,249,255,0.35)' : '#e6dcff';
+            c.beginPath(); c.moveTo(w * 0.2, y + h - ay); c.lineTo(w * 0.2 - s, y + h - ay - s * 1.6); c.lineTo(w * 0.2 + s, y + h - ay - s * 1.6); c.closePath(); c.fill();
+            c.fillRect(w * 0.2 - 1, y + h - ay - s * 1.6 - h * 0.3, 2, h * 0.3);
             break;
         }
         case 'mystery': { // oscura con borde arcoíris y un "?"
@@ -510,7 +530,8 @@ const player = {
         // Viento si no está en el suelo (la caja pesada lo ignora, la ligera lo nota más)
         if (!this.onGround) {
             if (!this.straightBounce) this.vx += effWind();
-            this.vy += effGrav() * gravityFactor;
+            if (gravFlipT > 0) this.vy = Math.max(-GRAV_FLIP_MAX_VY, this.vy - effGrav() * gravityFactor); // gravedad invertida: flota hacia arriba
+            else this.vy += effGrav() * gravityFactor;
             this.rotation += this.angularVelocity;
         } else {
             this.vy = 0;
@@ -573,7 +594,7 @@ const player = {
             ctx.translate(0, (this.h / 2) * (1 - sy));
             ctx.scale(sx, sy);
         }
-        drawBoxShape(ctx, boxType, this.w, this.h, performance.now(), { fuse: bombFuse });
+        drawBoxShape(ctx, boxType, this.w, this.h, performance.now(), { fuse: bombFuse, flip: gravFlipT > 0 });
         ctx.restore();
     }
 };
@@ -595,8 +616,8 @@ const precisionSystem = {
         this.targetArea.y = height - this.targetArea.h - 120;
     },
 
-    // Tamaño base de la zona verde (la caja psicodélica la fija en el 33 %)
-    greenBase() { return boxKind() === 'psychedelic' ? PSY_GREEN : this.targetArea.greenScale; },
+    // Tamaño base de la zona verde
+    greenBase() { return this.targetArea.greenScale; },
 
     spawnBall() {
         this.ball.x = this.canal.x + this.canal.w / 2;
@@ -730,8 +751,7 @@ const precisionSystem = {
         }
         ctx.strokeStyle = '#00ff64'; ctx.strokeRect(tx, gY, tw, greenH);
 
-        const hideBall = boxKind() === 'psychedelic' && this.ball.y > height / 2; // psicodélica: la bola desaparece de la mitad de la pantalla hacia abajo
-        if (this.ball.active && !hideBall) {
+        if (this.ball.active) {
             ctx.shadowBlur = 20; ctx.shadowColor = THEME.ball;
             const ballGrad = ctx.createRadialGradient(this.ball.x, this.ball.y, 0, this.ball.x, this.ball.y, this.ball.radius);
             ballGrad.addColorStop(0, '#fff'); ballGrad.addColorStop(0.3, THEME.ball); ballGrad.addColorStop(1, 'rgba(255, 0, 234, 0)');
@@ -805,6 +825,7 @@ class Platform {
         this.pauseTimer = 0;
         this.oscOffset = 0;
         this.isVisible = true;
+        this.rayT = 0; // 0..1: progreso del rayo de un dron sobre esta plataforma
         this.idx = -1; // orden dentro del nivel (0 = plataforma de salida); sirve para las lápidas
 
         if (type === 'mini_sticky') this.w *= 0.6;
@@ -844,6 +865,24 @@ class Platform {
             ctx.fillStyle = 'white';
             for (let i = 0; i < 4; i++) ctx.fillRect(this.x + 10 + i * (this.w / 4), this.y + 2, 4, 10);
         }
+        if (this.type === 'sling') { // horquilla de tirachinas con su goma
+            ctx.strokeStyle = '#ffd08a'; ctx.lineWidth = 3; ctx.lineCap = 'round';
+            ctx.beginPath();
+            ctx.moveTo(this.x + 6, this.y); ctx.lineTo(this.x + 6, this.y - 16);
+            ctx.moveTo(this.x + this.w - 6, this.y); ctx.lineTo(this.x + this.w - 6, this.y - 16);
+            ctx.stroke();
+            ctx.strokeStyle = 'rgba(255,159,28,0.8)'; ctx.lineWidth = 2;
+            ctx.beginPath(); ctx.moveTo(this.x + 6, this.y - 16); ctx.lineTo(this.x + this.w - 6, this.y - 16); ctx.stroke();
+        }
+        if (this.rayT > 0) { // el rayo de un dron la está destruyendo
+            ctx.fillStyle = 'rgba(255,40,40,' + (0.2 + 0.55 * this.rayT) + ')';
+            ctx.fillRect(this.x, this.y, this.w, this.h);
+            ctx.strokeStyle = 'rgba(255,255,255,' + (0.3 + 0.5 * this.rayT) + ')'; ctx.lineWidth = 1.5;
+            ctx.beginPath();
+            ctx.moveTo(this.x + this.w * 0.3, this.y); ctx.lineTo(this.x + this.w * 0.38, this.y + this.h * 0.6); ctx.lineTo(this.x + this.w * 0.3, this.y + this.h);
+            if (this.rayT > 0.5) { ctx.moveTo(this.x + this.w * 0.7, this.y); ctx.lineTo(this.x + this.w * 0.62, this.y + this.h * 0.5); ctx.lineTo(this.x + this.w * 0.7, this.y + this.h); }
+            ctx.stroke();
+        }
         if (this.type === 'oscillating') {
             ctx.fillStyle = 'rgba(255,255,255,0.4)';
             ctx.fillRect(this.x, this.y + this.h / 2 - 1, this.w, 2);
@@ -867,6 +906,7 @@ class Platform {
             case 'flash': return THEME.platformFlash;
             case 'mini_sticky': return THEME.platformMini;
             case 'fragile': return THEME.platformFragile;
+            case 'sling': return '#ff9f1c';
             default: return THEME.platformBright;
         }
     }
@@ -930,11 +970,28 @@ class Platform {
     }
 }
 
+// Drones: como las plataformas móviles, patrullan en horizontal o en vertical. A veces disparan un
+// rayo a la plataforma que tienen debajo y la destruyen en 5 s. Si la caja cae sobre el dron, lo
+// destruye y rebota hacia arriba, hacia la siguiente plataforma. (Los drones de las fases del
+// editor mantienen su comportamiento clásico: patrullan y matan al tocarlos.)
+const DRONE_RAY_SECONDS = 5;   // tiempo que tarda el rayo en destruir la plataforma
+const DRONE_VERT_RANGE = 45;   // recorrido (± px) de un dron vertical
+const DRONE_SHOOT_CHANCE = 0.5; // probabilidad de disparar cada vez que se "carga"
+
 class Obstacle {
     constructor(o) {
         this.w = 40; this.h = 20;
         this.color = THEME.obstacle;
         this.dead = false;
+        if (o && o.hover) { // dron "plataforma": horizontal o vertical, puede disparar rayo
+            this.hover = true; this.axis = o.axis; this.x = o.x; this.y = o.y; this.off = 0;
+            const spd = 1.5 + level * 0.05;
+            this.vx = o.axis === 'h' ? o.dir * spd : 0;
+            this.vy = o.axis === 'v' ? o.dir * spd * 0.7 : 0;
+            this.rnd = mulberry32(o.seed >>> 0);          // decisiones deterministas (misma fase diaria para todos)
+            this.state = 'patrol'; this.cool = 1.5 + this.rnd() * 2.5; this.fireT = 0; this.target = null;
+            return;
+        }
         if (o && o.patrol) { // dron de patrulla (fases del editor): va y viene sin salir nunca
             this.patrol = true; this.x = o.x; this.y = o.y; this.vx = o.dir * (2.2 + level * 0.15);
             return;
@@ -945,8 +1002,60 @@ class Obstacle {
         this.y = player.y - 300 - rY * 400;
         this.vx = (this.x < 0 ? 1 : -1) * (2 + level * 0.2);
     }
+    // Plataforma que tiene justo debajo (la más cercana), sin contar la meta
+    platformBelow() {
+        const cx = this.x + this.w / 2;
+        let best = null;
+        platforms.forEach((p) => {
+            if (p.isBroken || p.isGoal || p.type === 'temp_full' || (p.type === 'flash' && !p.isVisible)) return;
+            if (p.y > this.y + this.h && cx >= p.x && cx <= p.x + p.w && (!best || p.y < best.y)) best = p;
+        });
+        return best;
+    }
+    endFire() {
+        if (this.target) this.target.rayT = 0;
+        this.state = 'patrol'; this.target = null; this.fireT = 0;
+    }
+    kill() { // destruido por la caja: el rayo se corta y la plataforma se salva
+        if (this.target) this.target.rayT = 0;
+        this.target = null; this.dead = true;
+    }
     update() {
         if (this.dead) return false;
+        if (this.hover) {
+            const dt = frameDtMs / 1000;
+            if (this.state === 'fire') {
+                const t = this.target, cx = this.x + this.w / 2;
+                if (!t || t.isBroken || cx < t.x || cx > t.x + t.w) this.endFire(); // objetivo perdido
+                else {
+                    this.fireT += dt;
+                    t.rayT = Math.min(1, this.fireT / DRONE_RAY_SECONDS);
+                    if (this.fireT >= DRONE_RAY_SECONDS) {
+                        t.isBroken = true; t.rayT = 0;
+                        createExplosion(t.x + t.w / 2, t.y, 1.4);
+                        this.endFire();
+                    }
+                }
+            } else {
+                if (this.axis === 'h') {
+                    this.x += this.vx;
+                    if (this.x < 0) { this.x = 0; this.vx = Math.abs(this.vx); }
+                    else if (this.x + this.w > width) { this.x = width - this.w; this.vx = -Math.abs(this.vx); }
+                } else {
+                    this.y += this.vy; this.off += this.vy;
+                    if (Math.abs(this.off) > DRONE_VERT_RANGE) this.vy *= -1;
+                }
+                this.cool -= dt;
+                if (this.cool <= 0) {
+                    this.cool = 2 + this.rnd() * 3;
+                    if (this.rnd() < DRONE_SHOOT_CHANCE) {
+                        const t = this.platformBelow();
+                        if (t) { this.state = 'fire'; this.target = t; this.fireT = 0; }
+                    }
+                }
+            }
+            return this.y < height + 250;
+        }
         this.x += this.vx;
         if (this.patrol) {
             if (this.x < 0) { this.x = 0; this.vx = Math.abs(this.vx); }
@@ -957,6 +1066,14 @@ class Obstacle {
     }
     draw() {
         ctx.save();
+        if (this.hover && this.state === 'fire' && this.target) { // rayo hacia la plataforma
+            const bx = this.x + this.w / 2, by = this.y + this.h, prog = this.fireT / DRONE_RAY_SECONDS;
+            ctx.globalAlpha = 0.55 + 0.35 * Math.sin(performance.now() / 60);
+            ctx.strokeStyle = '#ff3b2f'; ctx.lineWidth = 2 + prog * 5;
+            ctx.shadowBlur = 16; ctx.shadowColor = '#ff3b2f';
+            ctx.beginPath(); ctx.moveTo(bx, by); ctx.lineTo(bx, this.target.y); ctx.stroke();
+            ctx.globalAlpha = 1;
+        }
         ctx.shadowBlur = 15; ctx.shadowColor = this.color;
         ctx.fillStyle = this.color;
         ctx.fillRect(this.x, this.y, this.w, this.h);
@@ -964,6 +1081,17 @@ class Obstacle {
         ctx.fillStyle = '#fff';
         ctx.fillRect(this.x + 5, this.y + 5, 5, 5);
         ctx.fillRect(this.x + this.w - 10, this.y + 5, 5, 5);
+        if (this.hover) { // hélices y luz: roja parpadeante mientras dispara
+            ctx.shadowBlur = 0;
+            ctx.strokeStyle = 'rgba(255,255,255,0.7)'; ctx.lineWidth = 2;
+            const sp = Math.sin(performance.now() / 40) * 6;
+            ctx.beginPath();
+            ctx.moveTo(this.x + 4 - sp, this.y - 3); ctx.lineTo(this.x + 4 + sp, this.y - 3);
+            ctx.moveTo(this.x + this.w - 4 - sp, this.y - 3); ctx.lineTo(this.x + this.w - 4 + sp, this.y - 3);
+            ctx.stroke();
+            ctx.fillStyle = this.state === 'fire' && Math.floor(performance.now() / 100) % 2 ? '#fff' : '#ffd23f';
+            ctx.fillRect(this.x + this.w / 2 - 2, this.y + this.h - 4, 4, 4);
+        }
         ctx.restore();
     }
 }
@@ -1106,10 +1234,10 @@ function initPlatforms(startLevel = 1) {
     powerups = [];
     blackHoles = [];
     particles = [];
-    aim.cancel();
+    aim.cancel(); cancelSling();
     originY = null; player.rocket = false;
     level = Math.max(1, startLevel);
-    runFirstLevel = level; rubberBoostUsed = false; bombRocket = false;
+    runFirstLevel = level; rubberBoostUsed = false; gravBoostUsed = false; gravFlipT = 0; bombRocket = false;
     boxType = chosenBox; if (boxType === 'mystery') pickMysteryBehavior(); // la caja elegida vale para los 3 primeros niveles
     cameraScroll = 0;
     platformsInLevel = levelPlatformCount();
@@ -1152,7 +1280,7 @@ function spawnNextPlatform(forceGoal = false) {
     const nextX = (precisionSystem.side === 'left' ? 50 : 30) + R() * (width - nextW - 80);
     // Tiradas siempre en el mismo orden (se usen o no): con la misma semilla el nivel sale idéntico
     const rType = R(), rIce = R(), rDirX = R(), rDirY = R(), rObs = R(), rObsSide = R(), rObsY = R(),
-        rPow = R(), rPowType = R(), rBH = R(), rBHx = R(), rBHr = R(), rProp = R(), rPw = R(), rPh = R(), rPx = R(), rHue = R(), rChest = R(), rChestT = R();
+        rPow = R(), rPowType = R(), rBH = R(), rBHx = R(), rBHr = R(), rProp = R(), rPw = R(), rPh = R(), rPx = R(), rHue = R(), rChest = R(), rChestT = R(), rSling = R();
 
     totalPlatformGlobalCount++;
 
@@ -1168,6 +1296,9 @@ function spawnNextPlatform(forceGoal = false) {
         else if (level >= 8 && rType < 0.55) type = 'moving';
     }
 
+    // Plataforma tirachinas (nivel 10+): solo sustituye a una plataforma normal
+    if (!forceGoal && type === 'normal' && level >= 10 && rSling < 0.1) type = 'sling';
+
     const platform = new Platform(nextX, nextY, nextW, 20, forceGoal, type, rDirX > 0.5, rDirY > 0.5);
     platforms.push(platform);
     platform.idx = platforms.length - 1;
@@ -1176,7 +1307,16 @@ function spawnNextPlatform(forceGoal = false) {
     if (!forceGoal && type !== 'flash' && rChest < CHEST_CHANCE) chests.push(new Chest(platform, 0.12 + rChestT * 0.76));
 
     // Obstáculos (Nivel 15+)
-    if (level >= 15 && rObs < 0.3) obstacles.push(new Obstacle({ rSide: rObsSide, rY: rObsY }));
+    if (level >= 15 && rObs < 0.3) {
+        const axis = rObsSide > 0.5 ? 'h' : 'v', dir = rObsY > 0.5 ? 1 : -1;
+        const seed = Math.floor((rObsY * 0.5 + rObsSide * 0.37 + rObs) * 4294967296) >>> 0;
+        if (axis === 'h') { // patrulla todo el ancho, sobrevolando la nueva plataforma
+            obstacles.push(new Obstacle({ hover: true, axis, dir, seed, x: Math.max(0, Math.min(width - 40, nextX + nextW / 2 - 20)), y: nextY - 105 - ((rObsSide * 10) % 1) * 45 }));
+        } else {            // sube y baja sobre un punto de la plataforma
+            const dx = nextX + nextW * (0.2 + 0.6 * ((rObsY * 10) % 1)) - 20;
+            obstacles.push(new Obstacle({ hover: true, axis, dir, seed, x: Math.max(0, Math.min(width - 40, dx)), y: nextY - 135 }));
+        }
+    }
 
     // Power-ups (Nivel 18+)
     if (level >= 18 && rPow < 0.15 && !hasShield && !canDoubleJump) {
@@ -1201,7 +1341,7 @@ function nextLevel() {
 
     level++;
     setLevelHUD();
-    rubberBoostUsed = false;
+    rubberBoostUsed = false; gravBoostUsed = false; gravFlipT = 0;
     // Cada 3 niveles la caja cambia al azar (la bomba lo hace al explotar)
     const wasBombBox = boxKind() === 'bomb';
     const played = level - runFirstLevel;
@@ -1219,6 +1359,7 @@ function nextLevel() {
     const lavaNext = isLavaLevel();
     showFeedback("¡NIVEL " + hudLevel() + "!" + (windForce !== 0 ? "\n¡CUIDADO CON EL VIENTO!" : "") + (gravityFactor < 1 ? "\n¡GRAVEDAD BAJA!" : "") +
         (lavaNext ? "\n🌋 ¡LAVA! Sube cada " + LAVA_RISE_EVERY + " s: no te quedes quieto" : "") +
+        (darkLevel ? "\n🌫️ ¡NIEBLA! Solo ves a tu alrededor" : "") +
         (wasBombBox && boxType !== 'mystery' ? "\n💣 ¡Bomba desactivada!" : "") + boxMsg);
 
     // Guardado automático cada 5 niveles (checkpoint) — solo en la partida normal
@@ -1279,8 +1420,7 @@ function computeJump(precision) {
     if (!player.onGround || multiplier <= 0) return null;
     const candidates = platforms.filter(p => p.y < player.y).sort((a, b) => b.y - a.y);
     if (candidates.length === 0) return null;
-    // Psicodélica + zona verde: salta directo a la 3.ª plataforma por encima (o a la meta)
-    const target = (boxKind() === 'psychedelic' && tier === "PERFECT") ? (psychedelicTarget() || candidates[0]) : candidates[0];
+    const target = candidates[0];
     const distY = player.y - target.y + player.h;
 
     const targetMultiplier = (tier === "PERFECT") ? 1.08 : (tier === "GOOD" ? 1.45 : (Math.random() > 0.5 ? 2.0 : 0.4));
@@ -1518,8 +1658,14 @@ function checkCollisions() {
     // Colisión Jugador con Obstáculos
     let shieldConsumedThisFrame = false;
     obstacles.forEach(obs => {
+        if (obs.dead) return;
         if (player.x + player.w > obs.x && player.x < obs.x + obs.w &&
             player.y + player.h > obs.y && player.y < obs.y + obs.h) {
+            // Caer sobre un dron "plataforma": lo destruye y la caja rebota hacia la siguiente plataforma
+            if (obs.hover && player.vy > 0 && (player.y + player.h - player.vy) <= obs.y + 8) {
+                stompDrone(obs);
+                return;
+            }
             if (hasShield || shieldConsumedThisFrame) {
                 if (hasShield) useShield();
                 shieldConsumedThisFrame = true;
@@ -1615,6 +1761,7 @@ function checkCollisions() {
                     showFeedback("¡RESORTE! 🚀");
                     createExplosion(p.x + p.w / 2, p.y, 0.8);
                 }
+                if (p.type === 'sling' && !p.isGoal) startSling(p); // plataforma tirachinas
                 if (p.isGoal) {
                     const wasBomb = boxKind() === 'bomb';
                     nextLevel();
@@ -1623,6 +1770,32 @@ function checkCollisions() {
             }
         }
     });
+}
+
+// Pisotón sobre un dron: se destruye y la caja bota hacia arriba, como en una plataforma de botes,
+// pero con la fuerza justa para llegar a la siguiente plataforma por encima.
+function stompDrone(obs) {
+    obs.kill();
+    createExplosion(obs.x + obs.w / 2, obs.y + obs.h / 2, 1.3);
+    const feet = player.y + player.h;
+    const cands = platforms.filter((p) => !p.isBroken && p.y < feet - 20 && p.type !== 'temp_full' && !(p.type === 'flash' && !p.isVisible))
+        .sort((a, b) => b.y - a.y); // la más cercana por encima
+    const target = cands[0], g = effGrav();
+    if (target) {
+        const distY = feet - target.y;
+        const vy = -Math.sqrt(2 * g * distY) * 1.12;
+        const tRise = Math.abs(vy / g), hFall = (vy * vy) / (2 * g) - distY;
+        const totalT = tRise + Math.sqrt(Math.max(0, 2 * hFall / g));
+        player.vy = vy;
+        player.vx = totalT > 0 ? ((target.x + target.w / 2) - (player.x + player.w / 2)) / totalT : 0;
+    } else {
+        player.vy = -Math.sqrt(2 * g * 220) * 1.4; player.vx = 0;
+    }
+    player.y = obs.y - player.h;
+    player.straightBounce = true; player.rocket = true; player.onGround = false;
+    player.angularVelocity = 0.1; doubleJumpUsed = false;
+    if (navigator.vibrate) { try { navigator.vibrate(25); } catch (e) { } }
+    showFeedback('💥 ¡DRON DESTRUIDO!');
 }
 
 // Estela de fuego y humo que sale de la base de la caja tras un autosalto
@@ -1787,6 +1960,11 @@ function drawStatusHUD() {
         ctx.fillText('🌋 LA LAVA SUBE EN ' + t.toFixed(1) + ' s', width / 2, y);
         y += 20;
     }
+    if (gravFlipT > 0) {
+        ctx.fillStyle = 'rgba(125,249,255,' + (0.7 + 0.3 * Math.sin(performance.now() / 120)) + ')';
+        ctx.fillText('🌀 GRAVEDAD INVERTIDA ' + (gravFlipT / 1000).toFixed(1) + ' s', width / 2, y);
+        y += 20;
+    }
     if (boxKind() === 'bomb' && boxType !== 'mystery' && !runEnded) {
         const urgent = bombFuse < 5;
         const pulse = urgent ? 0.6 + 0.4 * Math.sin(performance.now() / 80) : 1;
@@ -1874,6 +2052,96 @@ function placeTombstone() {
     const p = platforms.find((q) => q.idx === bestIdx);
     if (!p || p.w < 40) return;
     tombstones.push(new Tombstone(p, bestN, pickTombPhrase(), 0.12 + Math.random() * 0.3));
+}
+
+// ===================== PLATAFORMA TIRACHINAS =====================
+// Al aterrizar en ella el mundo se congela: arrastra el dedo hacia abajo (como en Angry Birds,
+// pero hacia arriba) y suelta. La caja sale lanzada con fuerza en sentido contrario al arrastre.
+// La línea punteada muestra la trayectoria; hay que apuntar a la siguiente plataforma.
+const SLING_MAX_PULL = 90;   // px de estirado máximo
+const SLING_MIN_PULL = 22;   // estirado mínimo para poder soltar
+const SLING_MAX_SPEED = 24;  // velocidad de salida con el estirado máximo
+const sling = { active: false, dragging: false, ax: 0, ay: 0, px: 0, py: 0, platform: null, target: null, sim: null };
+
+function cancelSling() { sling.active = false; sling.dragging = false; sling.platform = null; sling.target = null; sling.sim = null; }
+
+function startSling(p) {
+    const cands = platforms.filter((q) => !q.isBroken && q.y < player.y - 10 && !(q.type === 'flash' && !q.isVisible) && q.type !== 'temp_full')
+        .sort((a, b) => b.y - a.y); // la más cercana por encima = la siguiente plataforma
+    sling.active = true; sling.dragging = false; sling.platform = p; sling.target = cands[0] || null; sling.sim = null;
+    player.vx = 0; player.angularVelocity = 0;
+    showFeedback('🎯 ¡TIRACHINAS!\nArrastra hacia abajo y suelta');
+}
+function slingPoint(e) {
+    const rect = canvas.getBoundingClientRect();
+    const pt = (e.touches && e.touches.length) ? e.touches[0] : ((e.changedTouches && e.changedTouches.length) ? e.changedTouches[0] : e);
+    return { x: pt.clientX - rect.left, y: pt.clientY - rect.top };
+}
+function slingPull() {
+    let dx = sling.ax - sling.px, dy = sling.ay - sling.py; // sentido de lanzamiento = contrario al arrastre
+    let len = Math.hypot(dx, dy);
+    if (len > SLING_MAX_PULL) { dx *= SLING_MAX_PULL / len; dy *= SLING_MAX_PULL / len; len = SLING_MAX_PULL; }
+    const k = SLING_MAX_SPEED / SLING_MAX_PULL;
+    return { dx, dy, len, vx: dx * k, vy: dy * k, cx: player.x + player.w / 2, cy: player.y + player.h / 2 };
+}
+function slingUpdateSim() {
+    const v = slingPull();
+    sling.sim = (sling.dragging && v.len >= SLING_MIN_PULL && v.vy < -2)
+        ? simulateJump({ vy: v.vy, target: sling.target || { y: -1e9 } }, v.vx) : null;
+}
+function slingPress(e) {
+    if (!sling.active) return;
+    const pt = slingPoint(e);
+    sling.dragging = true; sling.ax = sling.px = pt.x; sling.ay = sling.py = pt.y;
+    slingUpdateSim();
+}
+function slingMove(e) {
+    if (!sling.active || !sling.dragging) return;
+    const pt = slingPoint(e);
+    sling.px = pt.x; sling.py = pt.y;
+    slingUpdateSim();
+}
+function slingRelease() {
+    if (!sling.active || !sling.dragging) return;
+    sling.dragging = false;
+    const v = slingPull();
+    if (v.len < SLING_MIN_PULL || v.vy > -2) { sling.sim = null; showFeedback('⬇️ Arrastra hacia abajo y suelta'); return; }
+    player.vx = v.vx; player.vy = v.vy;
+    player.onGround = false; player.currentPlatform = null;
+    player.straightBounce = false; player.bouncesLeft = 2; player.angularVelocity = 0.12; player.rocket = true;
+    doubleJumpUsed = false;
+    createExplosion(player.x + player.w / 2, player.y + player.h, 0.9);
+    if (navigator.vibrate) { try { navigator.vibrate(20); } catch (e) { } }
+    cancelSling();
+}
+function drawSling() {
+    if (!sling.active || !sling.platform) return;
+    const p = sling.platform, v = slingPull();
+    const pouch = sling.dragging ? { x: v.cx - v.dx, y: v.cy - v.dy } : { x: v.cx, y: v.cy };
+    ctx.save();
+    ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+    ctx.strokeStyle = '#ffd08a'; ctx.lineWidth = 4;
+    ctx.beginPath(); ctx.moveTo(p.x + 6, p.y - 16); ctx.lineTo(pouch.x, pouch.y); ctx.lineTo(p.x + p.w - 6, p.y - 16); ctx.stroke();
+    if (sling.sim) { // trayectoria punteada y marca de aterrizaje
+        const land = sling.sim.landing, col = land ? (land.onTarget ? '#00ff64' : '#ffae00') : '#ff3300';
+        sling.sim.pts.forEach((q, i, arr) => {
+            ctx.globalAlpha = Math.max(0.15, 0.9 - (i / arr.length) * 0.7);
+            ctx.fillStyle = col; ctx.beginPath(); ctx.arc(q.x, q.y, 2.4, 0, Math.PI * 2); ctx.fill();
+        });
+        ctx.globalAlpha = 1;
+        if (land) {
+            ctx.strokeStyle = col; ctx.lineWidth = 2; ctx.shadowBlur = 12; ctx.shadowColor = col;
+            ctx.strokeRect(land.x - player.w / 2, land.y - player.h, player.w, player.h);
+        }
+    }
+    ctx.shadowBlur = 0; ctx.globalAlpha = 1; ctx.textAlign = 'center';
+    ctx.font = 'bold 12px Outfit, Inter, sans-serif'; ctx.fillStyle = '#ffd08a';
+    if (sling.dragging) ctx.fillText('FUERZA ' + Math.round(v.len / SLING_MAX_PULL * 100) + ' %', pouch.x, pouch.y + 24);
+    else {
+        ctx.globalAlpha = 0.6 + 0.4 * Math.sin(performance.now() / 180);
+        ctx.fillText('⬇ ARRASTRA HACIA ABAJO Y SUELTA', width / 2, Math.min(height - 40, v.cy + 80));
+    }
+    ctx.restore();
 }
 
 // ===================== RESCATE EN EL ÚLTIMO SEGUNDO (QTE) =====================
@@ -2043,10 +2311,16 @@ let originY = null;
 function update() {
     const nowT = performance.now();
     const dtMs = Math.min(50, nowT - lastUpdateT); lastUpdateT = nowT; // el tiempo en pausa/apuntando no cuenta
+    frameDtMs = dtMs;
     if (!gameActive) return;
     if (aim.active) { aim.update(); updateParticles(); return; } // mundo congelado mientras se apunta
+    if (sling.active) { updateParticles(); return; }               // tirachinas: mundo congelado
     if (rescue.active) { updateRescue(dtMs); updateParticles(); return; } // rescate: mundo congelado
     if (maybeStartRescue()) { updateParticles(); return; }
+    if (gravFlipT > 0) { // gravedad invertida: cuenta atrás
+        gravFlipT -= dtMs;
+        if (gravFlipT <= 0) { gravFlipT = 0; showFeedback('⬇️ Gravedad normal'); }
+    }
     player.update();
     updateBombRocket();
     // Cohete: mientras sube tras un autosalto
@@ -2140,6 +2414,7 @@ function draw() {
     drawLava();
     player.draw();
     drawBombRing();
+    drawSling();
 
     // UI del Escudo / Powerups
     if (hasShield) {
@@ -2165,11 +2440,26 @@ function draw() {
     });
     ctx.globalAlpha = 1;
 
+    drawDarkness();
     precisionSystem.draw();
     drawWindHUD();
     drawStatusHUD();
     drawRescue();
     aim.draw();
+}
+
+// Nivel de niebla / modo oscuro: solo se ilumina un radio reducido alrededor de la caja
+function drawDarkness() {
+    if (!darkLevel) return;
+    const cx = player.x + player.w / 2, cy = player.y + player.h / 2;
+    const r = DARK_RADIUS * (1 + 0.03 * Math.sin(performance.now() / 400));
+    const grd = ctx.createRadialGradient(cx, cy, r * 0.5, cx, cy, r * 1.3);
+    grd.addColorStop(0, 'rgba(2,4,12,0)');
+    grd.addColorStop(0.55, 'rgba(2,4,12,0.8)');
+    grd.addColorStop(1, 'rgba(2,4,12,0.985)');
+    ctx.save();
+    ctx.fillStyle = grd; ctx.fillRect(0, 0, width, height);
+    ctx.restore();
 }
 
 function gameLoop() { update(); draw(); requestAnimationFrame(gameLoop); }
@@ -2201,7 +2491,7 @@ function finishRun(completed) {
     if (runEnded) return;
     runEnded = true;
     gameActive = false;
-    aim.cancel();
+    aim.cancel(); cancelSling(); gravFlipT = 0;
     resetRescue();
     // Muerte registrada para las lápidas de los demás (solo fase diaria y fases de la comunidad)
     if (!completed && modeCfg && modeCfg.onDeath && lastPlatIdx >= 0) {
@@ -2240,7 +2530,7 @@ function finishRun(completed) {
 function goToMenu() {
     if (!runEnded && gameMode === 'normal' && window.BJFirebase) window.BJFirebase.reportRun(level, heightCm());
     runEnded = true; gameActive = false; bombActive = false; bombRocket = false;
-    aim.cancel(); cancelReels(); updateInventoryUI();
+    aim.cancel(); cancelSling(); cancelReels(); updateInventoryUI(); gravFlipT = 0;
     resetRescue(); tombstones = []; lava.active = false;
     modeCfg = null; gameMode = 'normal';
     [gameOverScreen, document.getElementById('items-modal'), document.getElementById('settings-modal'), document.getElementById('ranking-modal')]
@@ -2325,6 +2615,9 @@ const triggerAction = (e) => {
         return;
     }
 
+    // Tirachinas: el toque empieza el arrastre
+    if (sling.active) { slingPress(e); return; }
+
     // Medidor de ángulo activo: este toque fija el ángulo y lanza
     if (aim.active) { aim.lock(); return; }
 
@@ -2335,6 +2628,17 @@ const triggerAction = (e) => {
         const tx = pt.clientX - rect.left, ty = pt.clientY - rect.top, pad = 22;
         if (tx >= player.x - pad && tx <= player.x + player.w + pad && ty >= player.y - pad && ty <= player.y + player.h + pad) {
             rubberBoost();
+            return;
+        }
+    }
+
+    // Caja gravitatoria: un toque sobre la propia caja (1 vez por nivel) invierte la gravedad 3 s
+    if (boxKind() === 'gravity' && !gravBoostUsed && gravFlipT <= 0) {
+        const rect = canvas.getBoundingClientRect();
+        const pt = (e.touches && e.touches.length) ? e.touches[0] : e;
+        const tx = pt.clientX - rect.left, ty = pt.clientY - rect.top, pad = 22;
+        if (tx >= player.x - pad && tx <= player.x + player.w + pad && ty >= player.y - pad && ty <= player.y + player.h + pad) {
+            gravityFlip();
             return;
         }
     }
@@ -2371,10 +2675,17 @@ window.addEventListener('touchstart', (e) => {
     triggerAction(e);
 }, { passive: false });
 
+// Arrastre de la tirachinas
+window.addEventListener('mousemove', (e) => { if (sling.active) slingMove(e); });
+window.addEventListener('touchmove', (e) => { if (sling.active && sling.dragging) { e.preventDefault(); slingMove(e); } }, { passive: false });
+window.addEventListener('mouseup', () => { if (sling.active) slingRelease(); });
+window.addEventListener('touchend', () => { if (sling.active) slingRelease(); });
+window.addEventListener('touchcancel', () => { if (sling.active) { sling.dragging = false; sling.sim = null; } });
+
 // INVENTARIO (los objetos salen de los cofres; usarlos es gratis)
 const game = {
     useItem(index) {
-        if (!gameActive || runEnded || aim.active || rescue.active || !inventory[index]) return;
+        if (!gameActive || runEnded || aim.active || sling.active || rescue.active || !inventory[index]) return;
         const type = inventory[index];
         inventory.splice(index, 1);
         updateInventoryUI();
@@ -2512,11 +2823,51 @@ window.BJGame = {
     getSide: () => precisionSystem.side,
 };
 
+// --- Cuadro "NUEVA CAJA": primera vez que aparece una caja (pausa la partida mientras se lee) ---
+let boxIntroQueue = [], boxIntroOpen = false, boxIntroWasActive = false, boxIntroTimer = null;
+let boxPickerRefresh = null;
+function openBoxIntro(key) {
+    const m = document.getElementById('box-intro-modal');
+    const cv = document.getElementById('box-intro-canvas');
+    document.getElementById('box-intro-name').textContent = BOX_TYPES[key].name;
+    document.getElementById('box-intro-desc').textContent = BOX_TYPES[key].desc;
+    const c = cv.getContext('2d');
+    const paint = () => {
+        c.clearRect(0, 0, cv.width, cv.height);
+        c.save(); c.translate(cv.width / 2, cv.height / 2);
+        drawBoxShape(c, key, 44, 44, performance.now(), { fuse: 99 });
+        c.restore();
+    };
+    clearInterval(boxIntroTimer); paint(); boxIntroTimer = setInterval(paint, 60);
+    m.classList.remove('hidden');
+}
+function showBoxIntro(key) {
+    const m = document.getElementById('box-intro-modal');
+    if (!m) return;
+    if (boxIntroOpen) { boxIntroQueue.push(key); return; }
+    boxIntroOpen = true; boxIntroWasActive = gameActive; gameActive = false;
+    aim.cancel(); cancelSling();
+    openBoxIntro(key);
+}
+function closeBoxIntro() {
+    if (boxIntroQueue.length) { openBoxIntro(boxIntroQueue.shift()); return; }
+    clearInterval(boxIntroTimer); boxIntroTimer = null;
+    document.getElementById('box-intro-modal').classList.add('hidden');
+    boxIntroOpen = false;
+    if (boxIntroWasActive && !runEnded) gameActive = true;
+    lastUpdateT = performance.now();
+}
+(function () {
+    const ok = document.getElementById('box-intro-ok');
+    if (ok) ok.addEventListener('click', closeBoxIntro);
+})();
+
 // --- "¿Cómo quieres empezar?": se muestra DESPUÉS de pulsar el modo de juego ---
 function askStart(onGo) {
     const scr = document.getElementById('start-choice-screen');
     if (!scr) { onGo(); return; }
     const go = document.getElementById('start-choice-go'), back = document.getElementById('start-choice-back');
+    if (boxPickerRefresh) boxPickerRefresh(); // las cajas desbloqueadas desde la última vez
     scr.classList.remove('hidden');
     go.onclick = () => { scr.classList.add('hidden'); onGo(); };
     back.onclick = () => scr.classList.add('hidden');
@@ -2531,11 +2882,11 @@ function initBoxPicker() {
         const el = document.createElement('div');
         el.className = 'box-opt'; el.setAttribute('role', 'button'); el.title = BOX_TYPES[key].name;
         const cv = document.createElement('canvas'); cv.width = 40; cv.height = 40;
-        const lb = document.createElement('span'); lb.textContent = BOX_TYPES[key].name;
+        const lb = document.createElement('span');
         el.appendChild(cv); el.appendChild(lb);
         el.addEventListener('click', () => selectBox(key));
         wrap.appendChild(el);
-        items.push({ key, el, cv });
+        items.push({ key, el, cv, lb });
     });
     function paint() {
         items.forEach(({ key, cv }) => {
@@ -2546,14 +2897,28 @@ function initBoxPicker() {
             c.restore();
         });
     }
-    function selectBox(key) {
-        chosenBox = key; boxType = key;
-        try { localStorage.setItem('boxjump_box_type', key); } catch (e) { /* no disponible */ }
-        items.forEach((i) => i.el.classList.toggle('active', i.key === key));
-        if (desc) desc.textContent = BOX_TYPES[key].desc;
+    function refresh() {
+        items.forEach(({ key, el, lb }) => {
+            const open = isUnlocked(key);
+            el.classList.toggle('locked', !open);
+            el.classList.toggle('active', open && key === chosenBox);
+            lb.textContent = open ? BOX_TYPES[key].name : '🔒';
+            el.title = open ? BOX_TYPES[key].name : 'Bloqueada';
+        });
+        if (desc) desc.textContent = BOX_TYPES[chosenBox].desc;
         paint();
     }
-    selectBox(chosenBox);
+    function selectBox(key) {
+        if (!isUnlocked(key)) { // bloqueada: se desbloquea cuando aparezca en una partida
+            if (desc) desc.textContent = '🔒 Caja bloqueada: se desbloquea cuando te aparezca al azar durante una partida.';
+            return;
+        }
+        chosenBox = key; boxType = key;
+        try { localStorage.setItem('boxjump_box_type', key); } catch (e) { /* no disponible */ }
+        refresh();
+    }
+    boxPickerRefresh = refresh;
+    refresh();
     const choiceScreen = document.getElementById('start-choice-screen');
     setInterval(() => { if (choiceScreen && !choiceScreen.classList.contains('hidden')) paint(); }, 90); // alas y mechas animadas
 }

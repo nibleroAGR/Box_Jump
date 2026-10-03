@@ -1127,3 +1127,12 @@ button:disabled { opacity: 0.35; pointer-events: none; filter: grayscale(0.6); }
 #start-choice-screen { background: rgba(5, 11, 24, 0.97); backdrop-filter: blur(20px); }
 #start-choice-screen .glass-card { padding: 1.6rem 1.3rem; max-width: 360px; width: 92%; }
 #start-choice-screen h2 { margin-bottom: 0.6rem; }
+
+/* Cajas bloqueadas y cuadro de nueva caja */
+.box-opt.locked { opacity: 0.4; filter: grayscale(1); cursor: default; }
+.box-opt.locked canvas { opacity: 0.35; }
+#box-intro-modal { background: rgba(5, 11, 24, 0.9); backdrop-filter: blur(14px); z-index: 260; }
+#box-intro-modal .glass-card { max-width: 330px; width: 90%; padding: 1.4rem 1.2rem; }
+.box-intro-tag { font-size: 0.72rem; letter-spacing: 2px; color: #ffd700; margin-bottom: 0.6rem; }
+#box-intro-canvas { width: 80px; height: 80px; display: block; margin: 0 auto 0.4rem; }
+#box-intro-modal h2 { margin: 0.2rem 0 0.4rem; }

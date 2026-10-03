@@ -6,7 +6,7 @@
     <meta name="viewport"
         content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
     <title>Box Jump Precision</title>
-    <link rel="stylesheet" href="style.css?v=17">
+    <link rel="stylesheet" href="style.css?v=18">
 </head>
 
 <body>
@@ -111,7 +111,7 @@
                     <div class="help-item">
                         <strong>📦 Cajas</strong>
                         Eliges tu caja en el menú, pero solo vale para los 3 primeros niveles. Después cambia al azar cada 3 niveles.<br>
-                        🔩 <b>Pesada</b> ignora el viento · 🪶 <b>Ligera</b> planea (cae despacio, el viento la empuja más) · 🟣 <b>Goma</b> rebota al caer y en las paredes; toca la caja (1 vez por nivel) para que bote como un resorte · 🟢 <b>Pegajosa</b> se pega a la plataforma · 💣 <b>Bomba</b>: 20 s por nivel; si la desactivas sale disparada como un cohete, explota y aparece otra caja · 🌀 <b>Psicodélica</b> tiene la zona verde al 33 % pero la bola desaparece de la mitad de la pantalla hacia abajo; si aciertas el verde (aunque no la veas) saltas directo a la 3.ª plataforma por encima (sin contar las móviles) o, si no hay tantas, a la del siguiente nivel · ❓ <b>Misteriosa</b> se comporta como otra caja al azar, sin decirte cuál.
+                        🔩 <b>Pesada</b> ignora el viento · 🪶 <b>Ligera</b> planea (cae despacio, el viento la empuja más) · 🟣 <b>Goma</b> rebota al caer y en las paredes; toca la caja (1 vez por nivel) para que bote como un resorte · 🟢 <b>Pegajosa</b> se pega a la plataforma · 💣 <b>Bomba</b>: 20 s por nivel; si la desactivas sale disparada como un cohete, explota y aparece otra caja · 🌀 <b>Gravitatoria</b>: toca la caja (1 vez por nivel) y la gravedad se invierte 3 s, así que flota hacia arriba · ❓ <b>Misteriosa</b> se comporta como otra caja al azar, sin decirte cuál.
                     </div>
                     <div class="help-item">
                         <strong>🌋 Lava (cada 10 niveles)</strong>
@@ -240,7 +240,7 @@
                     <div id="box-picker">
                         <p class="box-picker-title">TU CAJA</p>
                         <div id="box-options"></div>
-                        <p class="settings-help">Tu caja solo vale para los 3 primeros niveles; después cambia al azar cada 3.</p>
+                        <p class="settings-help">Tu caja solo vale para los 3 primeros niveles; después cambia al azar cada 3. Empiezas con la clásica y desbloqueas las demás cuando te aparezcan.</p>
                         <p id="box-desc" class="settings-help"></p>
                     </div>
                     <button id="start-choice-go" type="button">▶ EMPEZAR</button>
@@ -248,9 +248,20 @@
                 </div>
             </div>
 
+            <!-- ================= NUEVA CAJA (primera vez que aparece) ================= -->
+            <div id="box-intro-modal" class="screen hidden">
+                <div class="glass-card">
+                    <p class="box-intro-tag">📦 ¡NUEVA CAJA DESBLOQUEADA!</p>
+                    <canvas id="box-intro-canvas" width="80" height="80"></canvas>
+                    <h2 id="box-intro-name"></h2>
+                    <p id="box-intro-desc" class="settings-help"></p>
+                    <button id="box-intro-ok" type="button">ENTENDIDO</button>
+                </div>
+            </div>
+
         </div>
 
-        <script src="game.js?v=22"></script>
+        <script src="game.js?v=23"></script>
 
         <!-- SDK "compat" de Firebase: archivos únicos clásicos, sin import/export
              encadenados, para máxima compatibilidad entre navegadores/dispositivos. -->
