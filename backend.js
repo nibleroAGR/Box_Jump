@@ -79,6 +79,12 @@
         closeRankingBtn: $('close-ranking-btn'),
         tabGlobal: $('tab-global'),
         tabFriends: $('tab-friends'),
+        scopeDaily: $('scope-daily'),
+        scopeGeneral: $('scope-general'),
+        rankingBtn: $('ranking-btn'),
+        rankingNote: $('ranking-note'),
+        trophyBar: $('trophy-bar'),
+        trophyBanner: $('trophy-banner'),
         addFriendRow: $('add-friend-row'),
         friendCodeInput: $('friend-code-input'),
         addFriendBtn: $('add-friend-btn'),
@@ -100,7 +106,8 @@
         const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64"><rect width="64" height="64" fill="#101e3a"/><text x="32" y="43" font-size="32" font-family="Arial" font-weight="700" fill="#00f2ff" text-anchor="middle">${letter}</text></svg>`;
         return 'data:image/svg+xml;utf8,' + encodeURIComponent(svg);
     }
-    let activeRankingTab = 'global';
+    let activeRankingTab = 'global';   // 'global' | 'friends'
+    let activeRankingScope = 'general'; // 'daily' (ranking del día) | 'general'
 
     const AUTH_ERRORS = {
         'auth/popup-closed-by-user': 'Has cerrado la ventana de Google antes de terminar.',
@@ -385,37 +392,86 @@
         }
     }
 
-    function renderRankingRows(items, emptyMsg) {
+    // ---------- Copas (oro / plata / bronce) ----------
+    const DAILY_TOTAL = 10;                       // niveles de la fase diaria
+    const MIN_PLAYERS_FOR_CUP = 3;                // hacen falta al menos 3 jugadores para dar copa
+    const CUP_COLORS = { gold: '#ffd700', silver: '#c9d2dc', bronze: '#cd7f32' };
+    const CUP_NAMES = { gold: 'oro', silver: 'plata', bronze: 'bronce' };
+    const CUP_BY_POS = ['gold', 'silver', 'bronze'];
+    function cupSVG(kind, size) {
+        const c = CUP_COLORS[kind] || '#888', s = size || 20;
+        return `<svg class="cup" viewBox="0 0 24 24" width="${s}" height="${s}" aria-label="copa de ${CUP_NAMES[kind] || ''}">` +
+            `<path d="M6 3h12v4a6 6 0 0 1-12 0V3z" fill="${c}"/>` +
+            `<path d="M6 5H3v2a4 4 0 0 0 3 3.8M18 5h3v2a4 4 0 0 1-3 3.8" fill="none" stroke="${c}" stroke-width="1.7" stroke-linecap="round"/>` +
+            `<rect x="10.5" y="12.5" width="3" height="4" fill="${c}"/><rect x="7" y="17" width="10" height="3" rx="1" fill="${c}"/>` +
+            `<path d="M9 5.5v2.2a3 3 0 0 0 1.4 2.5" fill="none" stroke="rgba(255,255,255,0.55)" stroke-width="1.2" stroke-linecap="round"/></svg>`;
+    }
+    // Posición con copa solo si hay al menos 3 jugadores en esa clasificación
+    const posLabel = (i, total) => (i < 3 && total >= MIN_PLAYERS_FOR_CUP ? cupSVG(CUP_BY_POS[i], 22) : `${i + 1}º`);
+
+    function renderRankingRows(items, emptyMsg, kind) {
         dom.rankingList.innerHTML = '';
         if (!items.length) {
             dom.rankingList.innerHTML = `<p class="ranking-empty">${emptyMsg}</p>`;
             return;
         }
         items.forEach((it, i) => {
-            const medal = i === 0 ? '🥇' : i === 1 ? '🥈' : i === 2 ? '🥉' : `${i + 1}º`;
             const safeName = (it.username || it.displayName || 'Jugador').replace(/[<>&]/g, '');
+            const score = kind === 'daily'
+                ? `<small class="rank-level">${it.completed ? '✔ ' + DAILY_TOTAL : 'Nv ' + Math.min(DAILY_TOTAL, (it.cleared || 0) + 1)}/${DAILY_TOTAL}</small>${it.height || 0} cm`
+                : `<small class="rank-level">Nv ${it.bestLevel || 1}</small>${it.bestHeight || 0} cm`;
             const row = document.createElement('div');
             row.className = 'ranking-row' + (currentUser && it.uid === currentUser.uid ? ' me' : '');
             row.innerHTML = `
-                <span class="rank-pos">${medal}</span>
+                <span class="rank-pos">${posLabel(i, items.length)}</span>
                 <img class="rank-avatar" src="${it.photoURL || ''}" onerror="this.style.visibility='hidden'" />
                 <span class="rank-name">${safeName}</span>
-                <span class="rank-score"><small class="rank-level">Nv ${it.bestLevel || 1}</small>${it.bestHeight || 0} cm</span>
+                <span class="rank-score">${score}</span>
             `;
             dom.rankingList.appendChild(row);
         });
     }
 
+    // Marcador de copas conseguidas (se guardan en el perfil: users/{uid}.trophies)
+    function trophyCounts(map) {
+        const c = { gold: 0, silver: 0, bronze: 0 };
+        Object.values(map || {}).forEach((m) => { if (c[m] !== undefined) c[m]++; });
+        return c;
+    }
+    async function renderTrophyBar() {
+        if (!dom.trophyBar || !currentUser) return;
+        try {
+            const snap = await users().doc(currentUser.uid).get();
+            const t = (snap.exists && snap.data().trophies) || {};
+            const g = trophyCounts(t.global), f = trophyCounts(t.friends);
+            const part = (label, c) => `<span class="trophy-group"><b>${label}</b>` +
+                ['gold', 'silver', 'bronze'].map((k) => `${cupSVG(k, 18)}<i>${c[k]}</i>`).join('') + '</span>';
+            dom.trophyBar.innerHTML = '<span class="trophy-title">TUS COPAS</span>' + part('Global', g) + part('Amigos', f);
+            dom.trophyBar.classList.remove('hidden');
+        } catch (err) { dom.trophyBar.classList.add('hidden'); }
+    }
+
     async function refreshRankingView() {
         dom.rankingList.innerHTML = '<p class="ranking-empty">Cargando...</p>';
         const isGlobal = activeRankingTab === 'global';
+        const daily = activeRankingScope === 'daily';
         dom.addFriendRow.classList.toggle('hidden', isGlobal);
+        if (dom.scopeDaily) dom.scopeDaily.classList.toggle('active', daily);
+        if (dom.scopeGeneral) dom.scopeGeneral.classList.toggle('active', !daily);
+        if (dom.rankingNote) {
+            dom.rankingNote.textContent = daily
+                ? `Fase diaria de hoy (${dailyKey()}). Las copas de oro, plata y bronce solo se dan con ${MIN_PLAYERS_FOR_CUP} jugadores o más.`
+                : `Clasificación general. Las copas solo se muestran con ${MIN_PLAYERS_FOR_CUP} jugadores o más.`;
+        }
+        renderTrophyBar();
         try {
-            const items = isGlobal ? await fetchGlobalTop(20) : await fetchFriendsTop();
-            const emptyMsg = isGlobal
-                ? 'Aún no hay marcas. ¡Sé el primero!'
-                : 'Añade amigos con su código para ver su clasificación aquí.';
-            renderRankingRows(items, emptyMsg);
+            let items;
+            if (daily) items = isGlobal ? await getDailyTop(dailyKey(), 20) : await getDailyFriends(dailyKey());
+            else items = isGlobal ? await fetchGlobalTop(20) : await fetchFriendsTop();
+            const emptyMsg = daily
+                ? (isGlobal ? 'Nadie ha jugado hoy la fase diaria todavía. ¡Sé el primero!' : 'Ni tú ni tus amigos habéis jugado la fase de hoy todavía.')
+                : (isGlobal ? 'Aún no hay marcas. ¡Sé el primero!' : 'Añade amigos con su código para ver su clasificación aquí.');
+            renderRankingRows(items, emptyMsg, daily ? 'daily' : 'general');
         } catch (err) {
             console.error('Error al cargar la clasificación:', err);
             dom.rankingList.innerHTML = '<p class="ranking-empty">Error al cargar la clasificación.</p>';
@@ -504,6 +560,7 @@
             showFriendCode(profile.friendCode || profile.username || '');
             dom.profileName.innerText = profile.username || user.displayName || 'Jugador';
             dom.profileAvatar.src = profile.photoURL || avatarFor(profile.username || user.email);
+            checkTrophies().then(showTrophyBanner).catch((err) => console.warn('Copas no disponibles:', err));
             window.dispatchEvent(new CustomEvent('bj-auth-changed', {
                 detail: {
                     signedIn: true,
@@ -527,6 +584,9 @@
     dom.signoutBtn.addEventListener('click', signOutUser);
 
     dom.rankingFab.addEventListener('click', openRankingModal);
+    if (dom.rankingBtn) dom.rankingBtn.addEventListener('click', openRankingModal); // botón de la pantalla de inicio
+    if (dom.scopeDaily) dom.scopeDaily.addEventListener('click', () => { activeRankingScope = 'daily'; refreshRankingView(); });
+    if (dom.scopeGeneral) dom.scopeGeneral.addEventListener('click', () => { activeRankingScope = 'general'; refreshRankingView(); });
     dom.closeRankingBtn.addEventListener('click', closeRankingModal);
 
     dom.tabGlobal.addEventListener('click', () => {
@@ -652,6 +712,73 @@
         return snap.exists ? { uid: snap.id, ...snap.data() } : null;
     }
 
+    // Clave del día en hora de Madrid (la misma que usa la fase diaria) y días anteriores
+    const DAILY_TZ = 'Europe/Madrid';
+    const dailyKey = () => new Intl.DateTimeFormat('en-CA', { timeZone: DAILY_TZ, year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
+    function dayKeyBack(n) {
+        const [y, m, d] = dailyKey().split('-').map(Number);
+        return new Date(Date.UTC(y, m - 1, d - n)).toISOString().slice(0, 10);
+    }
+    async function myFriendUids() {
+        const snap = await users().doc(currentUser.uid).get();
+        return (snap.exists && snap.data().friends) || [];
+    }
+    // Fase diaria entre tú y tus amigos (solo los que han jugado ese día)
+    async function getDailyFriends(key) {
+        if (!currentUser) return [];
+        const uids = [currentUser.uid, ...(await myFriendUids())];
+        const docs = await Promise.all(uids.map((u) => dailyCol(key).doc(u).get().catch(() => null)));
+        return docs.filter((s) => s && s.exists).map((s) => ({ uid: s.id, ...s.data() }))
+            .sort((a, b2) => (b2.rankKey || 0) - (a.rankKey || 0));
+    }
+
+    // ---------- Copas de la fase diaria ----------
+    // Cuando un día se cierra se mira tu puesto: 1.º oro, 2.º plata, 3.º bronce, siempre que
+    // haya al menos 3 jugadores en esa categoría (global: todos los que jugaron; amigos: tú y tus amigos).
+    // Se revisan los últimos 7 días que aún no se habían revisado y se guardan en users/{uid}.trophies.
+    async function checkTrophies() {
+        if (!currentUser) return [];
+        const uid = currentUser.uid, lsKey = 'bj_trophy_checked_' + uid;
+        let last = null;
+        try { last = localStorage.getItem(lsKey); } catch (e) { /* no disponible */ }
+        const days = [];
+        for (let i = 1; i <= 7; i++) { const k = dayKeyBack(i); if (last && k <= last) break; days.unshift(k); }
+        if (!days.length) return [];
+        const awards = [];
+        let friendUids = null;
+        const medalFor = (docs, mine) => {
+            if (docs.length < MIN_PLAYERS_FOR_CUP) return null;
+            const pos = docs.filter((r) => (r.rankKey || 0) > (mine.rankKey || 0)).length; // 0 = primero (los empates comparten puesto)
+            return pos < 3 ? CUP_BY_POS[pos] : null;
+        };
+        for (const day of days) {
+            const mine = await getMyDaily(day);
+            if (!mine) continue;
+            const top = await getDailyTop(day, 3);
+            const g = medalFor(top, mine);
+            if (g) awards.push({ day, cat: 'global', medal: g });
+            if (friendUids === null) friendUids = await myFriendUids();
+            if (friendUids.length >= MIN_PLAYERS_FOR_CUP - 1) {
+                const fdocs = await getDailyFriends(day);
+                const f = medalFor(fdocs, mine);
+                if (f) awards.push({ day, cat: 'friends', medal: f });
+            }
+        }
+        if (awards.length) {
+            const trophies = { global: {}, friends: {} };
+            awards.forEach((a) => { trophies[a.cat][a.day] = a.medal; });
+            await users().doc(uid).set({ trophies }, { merge: true });
+        }
+        try { localStorage.setItem(lsKey, dayKeyBack(1)); } catch (e) { /* no disponible */ }
+        return awards;
+    }
+    function showTrophyBanner(awards) {
+        if (!dom.trophyBanner || !awards || !awards.length) return;
+        const txt = awards.map((a) => `${cupSVG(a.medal, 18)} copa de ${CUP_NAMES[a.medal]} (${a.cat === 'global' ? 'global' : 'amigos'}, ${a.day})`).join(' · ');
+        dom.trophyBanner.innerHTML = '🏆 ¡Has ganado! ' + txt;
+        dom.trophyBanner.classList.remove('hidden');
+    }
+
     // Lápidas: contador de muertes por nivel y plataforma.
     //   daily/{fecha}/deaths/L{nivel}   y   levels/{id}/deaths/L{nivel}
     //   Cada documento es { p0: n, p1: n, ... }: p{i} = veces que alguien murió saltando desde la plataforma i del nivel.
@@ -745,7 +872,7 @@
         reportRun,
         saveProgress,
         uid: () => (currentUser ? currentUser.uid : null),
-        reportDaily, getDailyTop, getMyDaily,
+        reportDaily, getDailyTop, getMyDaily, getDailyFriends, checkTrophies,
         reportDeath, getDeaths,
         listDrafts, saveDraft, deleteDraft,
         publishLevel, unpublishLevel, searchLevels, bumpLevelStat,

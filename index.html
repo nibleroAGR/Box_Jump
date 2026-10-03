@@ -6,7 +6,7 @@
     <meta name="viewport"
         content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
     <title>Box Jump Precision</title>
-    <link rel="stylesheet" href="style.css?v=18">
+    <link rel="stylesheet" href="style.css?v=19">
 </head>
 
 <body>
@@ -48,10 +48,16 @@
             <div id="ranking-modal" class="screen hidden">
                 <div class="glass-card ranking-card">
                     <h2>CLASIFICACIÓN</h2>
+                    <div class="ranking-tabs scope-tabs">
+                        <button id="scope-daily" class="rank-tab">📅 HOY</button>
+                        <button id="scope-general" class="rank-tab active">🏆 GENERAL</button>
+                    </div>
                     <div class="ranking-tabs">
                         <button id="tab-global" class="rank-tab active">🌍 GLOBAL</button>
                         <button id="tab-friends" class="rank-tab">👥 AMIGOS</button>
                     </div>
+                    <p id="ranking-note" class="settings-help ranking-note"></p>
+                    <p id="trophy-bar" class="trophy-bar hidden"></p>
                     <div id="ranking-list" class="ranking-list">
                         <p class="ranking-empty">Cargando...</p>
                     </div>
@@ -122,7 +128,7 @@
                     </div>
                     <div class="help-item">
                         <strong>🌋 Lava (cada 10 niveles)</strong>
-                        Cada 6 segundos la lava sube un poco por encima de la siguiente plataforma. No te quedes quieto: si te alcanza, caes.
+                        Cada 5 segundos la lava sube un poco por encima de la siguiente plataforma. No te quedes quieto: si te alcanza, caes.
                     </div>
                     <div class="help-item">
                         <strong>🆘 Rescate</strong>
@@ -161,7 +167,9 @@
                             <button id="start-btn" class="menu-btn">2 · ▶ CONTINUAR</button>
                             <button id="daily-btn" class="menu-btn">3 · 📅 FASE DIARIA</button>
                             <button id="creator-btn" class="menu-btn">4 · 🛠 CREADOR</button>
+                            <button id="ranking-btn" class="menu-btn">5 · 🏆 RANKING</button>
                         </div>
+                        <p id="trophy-banner" class="trophy-banner hidden"></p>
                         <button id="signout-btn" class="secondary-btn ghost-btn">Cerrar sesión</button>
                     </div>
                 </div>
@@ -269,14 +277,14 @@
         </div>
 
         <script src="audio.js?v=1"></script>
-        <script src="game.js?v=24"></script>
+        <script src="game.js?v=25"></script>
 
         <!-- SDK "compat" de Firebase: archivos únicos clásicos, sin import/export
              encadenados, para máxima compatibilidad entre navegadores/dispositivos. -->
         <script src="https://www.gstatic.com/firebasejs/10.13.2/firebase-app-compat.js"></script>
         <script src="https://www.gstatic.com/firebasejs/10.13.2/firebase-auth-compat.js"></script>
         <script src="https://www.gstatic.com/firebasejs/10.13.2/firebase-firestore-compat.js"></script>
-        <script src="backend.js?v=9"></script>
+        <script src="backend.js?v=10"></script>
         <script src="modes.js?v=5"></script>
     </div>
 </body>

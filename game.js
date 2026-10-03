@@ -470,8 +470,8 @@ function drawBoxShape(c, type, w, h, t, o = {}) {
 // ===================== LAVA ASCENDENTE (cada 10 niveles) =====================
 const LAVA_EVERY = 10;      // un nivel de lava cada N niveles
 const LAVA_MAX_SKIPS = 3;   // (en desuso) antes: pasadas sin pulsar
-const LAVA_RISE_EVERY = 6;  // segundos entre cada subida de la lava
-const lava = { active: false, y: 0, targetY: 0, skips: 0, doom: false, armed: false, t: 0, timer: 6 };
+const LAVA_RISE_EVERY = 5;  // segundos entre cada subida de la lava
+const lava = { active: false, y: 0, targetY: 0, skips: 0, doom: false, armed: false, t: 0, timer: 5 };
 
 // ===================== LÁPIDAS (muertes de otros jugadores) =====================
 let tombstones = [];
@@ -979,9 +979,9 @@ class Platform {
 }
 
 // Drones: como las plataformas móviles, patrullan en horizontal o en vertical. A veces disparan un
-// rayo a la plataforma que tienen debajo y la destruyen en 5 s. Si la caja cae sobre el dron, lo
-// destruye y rebota hacia arriba, hacia la siguiente plataforma. (Los drones de las fases del
-// editor mantienen su comportamiento clásico: patrullan y matan al tocarlos.)
+// rayo a la plataforma que tienen debajo y la destruyen en 5 s. NO matan: ni al tocarlos ni con el rayo
+// (el rayo solo elimina plataformas). Si la caja cae sobre el dron lo destruye y rebota hacia arriba,
+// hacia la siguiente plataforma.
 const DRONE_RAY_SECONDS = 5;   // tiempo que tarda el rayo en destruir la plataforma
 const DRONE_VERT_RANGE = 45;   // recorrido (± px) de un dron vertical
 const DRONE_SHOOT_CHANCE = 0.5; // probabilidad de disparar cada vez que se "carga"
@@ -1669,24 +1669,14 @@ function drawWindHUD() {
 function checkCollisions() {
     player.onGround = false;
 
-    // Colisión Jugador con Obstáculos
-    let shieldConsumedThisFrame = false;
+    // Drones: no matan al tocarlos. Actúan como plataformas: si la caja cae encima, el dron se destruye y la
+    // caja rebota hacia la siguiente plataforma; por los lados o por debajo se pueden atravesar sin daño.
     obstacles.forEach(obs => {
         if (obs.dead) return;
         if (player.x + player.w > obs.x && player.x < obs.x + obs.w &&
-            player.y + player.h > obs.y && player.y < obs.y + obs.h) {
-            // Caer sobre un dron "plataforma": lo destruye y la caja rebota hacia la siguiente plataforma
-            if (obs.hover && player.vy > 0 && (player.y + player.h - player.vy) <= obs.y + 8) {
-                stompDrone(obs);
-                return;
-            }
-            if (hasShield || shieldConsumedThisFrame) {
-                if (hasShield) useShield();
-                shieldConsumedThisFrame = true;
-                obs.x = -1000; obs.dead = true; // Eliminar obstáculo
-            } else {
-                endGame();
-            }
+            player.y + player.h > obs.y && player.y < obs.y + obs.h &&
+            player.vy > 0 && (player.y + player.h - player.vy) <= obs.y + 8) {
+            stompDrone(obs);
         }
     });
 

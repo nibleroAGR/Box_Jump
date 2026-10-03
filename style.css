@@ -1136,3 +1136,20 @@ button:disabled { opacity: 0.35; pointer-events: none; filter: grayscale(0.6); }
 .box-intro-tag { font-size: 0.72rem; letter-spacing: 2px; color: #ffd700; margin-bottom: 0.6rem; }
 #box-intro-canvas { width: 80px; height: 80px; display: block; margin: 0 auto 0.4rem; }
 #box-intro-modal h2 { margin: 0.2rem 0 0.4rem; }
+
+/* Ranking desde el inicio: por encima de la pantalla de inicio, pestañas de ámbito y copas */
+#ranking-modal { z-index: 240; }
+.scope-tabs { margin-bottom: 0.4rem; }
+.ranking-note { margin: 0.3rem 0 0.5rem; font-size: 0.7rem; }
+.cup { display: inline-block; vertical-align: middle; filter: drop-shadow(0 0 4px rgba(255, 255, 255, 0.25)); }
+.trophy-bar { display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: 0.3rem 0.9rem;
+    margin: 0.2rem 0 0.6rem; padding: 0.4rem 0.6rem; border-radius: 10px; background: rgba(255, 215, 0, 0.07);
+    border: 1px solid rgba(255, 215, 0, 0.25); font-size: 0.72rem; }
+.trophy-bar.hidden { display: none; }
+.trophy-title { width: 100%; text-align: center; letter-spacing: 2px; font-size: 0.62rem; color: #ffd700; }
+.trophy-group { display: inline-flex; align-items: center; gap: 0.25rem; }
+.trophy-group b { font-weight: 600; margin-right: 0.15rem; opacity: 0.8; }
+.trophy-group i { font-style: normal; margin-right: 0.25rem; font-weight: 700; }
+.trophy-banner { margin: 0.6rem 0 0; padding: 0.5rem 0.7rem; border-radius: 10px; font-size: 0.78rem; line-height: 1.5;
+    background: rgba(255, 215, 0, 0.1); border: 1px solid rgba(255, 215, 0, 0.35); color: #ffe9a3; }
+.trophy-banner.hidden { display: none; }
