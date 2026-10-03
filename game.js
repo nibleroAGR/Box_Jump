@@ -206,6 +206,8 @@ const THEME = {
 };
 
 // MULTIPLIERS & STATE
+// Sonido (audio.js): nunca debe romper el juego si no está disponible
+const sfx = (n, o) => { try { if (window.SFX) window.SFX.play(n, o); } catch (e) { /* sin audio */ } };
 let combo = 0;
 let maxCombo = 0;
 let windForce = 0;
@@ -314,11 +316,13 @@ function gravityFlip() {
     if (player.onGround) { player.onGround = false; player.vy = -3; } // se despega de la plataforma
     player.straightBounce = false;
     showFeedback('🌀 ¡GRAVEDAD INVERTIDA! 3 s');
+    sfx('gravity_on');
     createExplosion(player.x + player.w / 2, player.y + player.h / 2, 0.8);
 }
 
 // --- Caja bomba: al desactivarla sale disparada como un cohete, explota y aparece otra caja ---
 function launchBombRocket() {
+    sfx('rocket');
     bombRocket = true;
     player.vy = -Math.sqrt(2 * player.gravity * 320);
     player.vx = 0; player.angularVelocity = 0; player.rotation = 0;
@@ -330,6 +334,7 @@ function updateBombRocket() {
         bombRocket = false; player.rocket = false;
         const cx = player.x + player.w / 2, cy = player.y + player.h / 2;
         createExplosion(cx, cy, 2.5); createExplosion(cx, cy, 1.2);
+        sfx('explosion');
         if (navigator.vibrate) { try { navigator.vibrate(60); } catch (e) { /* sin vibración */ } }
         const next = rollRandomBox(boxType);
         setActiveBox(next);
@@ -345,6 +350,7 @@ function rubberBoost() {
     player.onGround = false; player.angularVelocity = 0; player.squash = 1;
     doubleJumpUsed = false;
     showFeedback('🟣 ¡BOTE!');
+    sfx('spring');
     createExplosion(player.x + player.w / 2, player.y + player.h, 0.8);
 }
 
@@ -685,6 +691,7 @@ const precisionSystem = {
             }
 
             updateComboDisplay();
+            sfx('hit', { tier });
 
             let feedback = tier + (tier === "PERFECT" ? ` x${Math.round(subScore * 5)}` : "");
             if (combo > 1) feedback += `\nCOMBO x${combo}!`;
@@ -696,6 +703,7 @@ const precisionSystem = {
         }
         combo = 0; // Fallar tiro reinicia combo
         updateComboDisplay();
+        sfx('miss');
         return { multiplier: 0, tier: "MISSED", subScore: 0 };
     },
 
@@ -1033,6 +1041,7 @@ class Obstacle {
                     if (this.fireT >= DRONE_RAY_SECONDS) {
                         t.isBroken = true; t.rayT = 0;
                         createExplosion(t.x + t.w / 2, t.y, 1.4);
+                        sfx('ray_break');
                         this.endFire();
                     }
                 }
@@ -1050,7 +1059,7 @@ class Obstacle {
                     this.cool = 2 + this.rnd() * 3;
                     if (this.rnd() < DRONE_SHOOT_CHANCE) {
                         const t = this.platformBelow();
-                        if (t) { this.state = 'fire'; this.target = t; this.fireT = 0; }
+                        if (t) { this.state = 'fire'; this.target = t; this.fireT = 0; if (this.y > -20 && this.y < height) sfx('ray'); }
                     }
                 }
             }
@@ -1194,6 +1203,7 @@ function openChest(c) {
     c.opened = true; c.age = 0;
     createExplosion(c.x + c.w / 2, c.y, 1.0);
     showFeedback("🎁 ¡COFRE ABIERTO!");
+    sfx('chest');
     const now = performance.now();
     const base = reels.length ? reels[reels.length - 1].stopAt : now + 500;
     for (let i = 0; i < free; i++) {
@@ -1206,6 +1216,7 @@ function tickReels() {
     const now = performance.now();
     while (reels.length && now >= reels[0].stopAt) {
         inventory.push(reels.shift().final);
+        sfx('reel');
         const el = document.getElementById(`slot-${inventory.length - 1}`);
         if (el) { el.classList.remove('landed'); void el.offsetWidth; el.classList.add('landed'); }
     }
@@ -1218,6 +1229,7 @@ function cancelReels() {
 }
 
 function useShield() {
+    sfx('shield');
     hasShield = false;
     player.vy = -15;
     player.vx = 0;
@@ -1340,6 +1352,7 @@ function nextLevel() {
     if (modeCfg && level >= modeCfg.last) { finishRun(true); return; }
 
     level++;
+    sfx('level_up');
     setLevelHUD();
     rubberBoostUsed = false; gravBoostUsed = false; gravFlipT = 0;
     // Cada 3 niveles la caja cambia al azar (la bomba lo hace al explotar)
@@ -1438,6 +1451,7 @@ function computeJump(precision) {
 }
 
 function launchPlayer(j, vx) {
+    sfx('jump', { tier: j.tier });
     player.vy = j.vy;
     player.vx = vx;
     player.onGround = false;
@@ -1733,6 +1747,7 @@ function checkCollisions() {
                 if (p.type === 'moving') player.vx = 0;
 
                 player.currentPlatform = p;
+                sfx('land', { impact });
                 lastPlatIdx = p.idx;
                 platformsReached++;
                 doubleJumpUsed = false; // Reset salto doble al tocar suelo
@@ -1759,6 +1774,7 @@ function checkCollisions() {
                     player.angularVelocity = 0;   // sube recto, como un cohete
                     doubleJumpUsed = false;
                     showFeedback("¡RESORTE! 🚀");
+                    sfx('spring');
                     createExplosion(p.x + p.w / 2, p.y, 0.8);
                 }
                 if (p.type === 'sling' && !p.isGoal) startSling(p); // plataforma tirachinas
@@ -1796,6 +1812,7 @@ function stompDrone(obs) {
     player.angularVelocity = 0.1; doubleJumpUsed = false;
     if (navigator.vibrate) { try { navigator.vibrate(25); } catch (e) { } }
     showFeedback('💥 ¡DRON DESTRUIDO!');
+    sfx('drone_destroy');
 }
 
 // Estela de fuego y humo que sale de la base de la caja tras un autosalto
@@ -1892,6 +1909,7 @@ function lavaRise() {
         .sort((a, b) => b.y - a.y)[0];
     lava.targetY = next ? next.y - 16 : base - 80;
     showFeedback('🌋 ¡LA LAVA SUBE!');
+    sfx('lava');
 }
 
 function updateLava(dtSec = 0) {
@@ -2071,6 +2089,7 @@ function startSling(p) {
     sling.active = true; sling.dragging = false; sling.platform = p; sling.target = cands[0] || null; sling.sim = null;
     player.vx = 0; player.angularVelocity = 0;
     showFeedback('🎯 ¡TIRACHINAS!\nArrastra hacia abajo y suelta');
+    sfx('sling_ready');
 }
 function slingPoint(e) {
     const rect = canvas.getBoundingClientRect();
@@ -2093,6 +2112,7 @@ function slingPress(e) {
     if (!sling.active) return;
     const pt = slingPoint(e);
     sling.dragging = true; sling.ax = sling.px = pt.x; sling.ay = sling.py = pt.y;
+    sfx('sling_pull');
     slingUpdateSim();
 }
 function slingMove(e) {
@@ -2111,6 +2131,7 @@ function slingRelease() {
     player.straightBounce = false; player.bouncesLeft = 2; player.angularVelocity = 0.12; player.rocket = true;
     doubleJumpUsed = false;
     createExplosion(player.x + player.w / 2, player.y + player.h, 0.9);
+    sfx('sling_launch');
     if (navigator.vibrate) { try { navigator.vibrate(20); } catch (e) { } }
     cancelSling();
 }
@@ -2178,6 +2199,7 @@ function maybeStartRescue() {
     rescue.target = rescueTarget();
     newRescueButton();
     showFeedback('🆘 ¡RESCATE!\nPulsa cuando el aro encaje');
+    sfx('rescue_alert');
     return true;
 }
 function newRescueButton() {
@@ -2200,6 +2222,7 @@ function rescuePress(px, py) {
         spawnFirework(rescue.btn.x, rescue.btn.y, last);
         if (navigator.vibrate) { try { navigator.vibrate(12); } catch (e) { } }
         rescue.step++;
+        sfx(last ? 'rescue_win' : 'rescue_ok');
         if (last) rescueSuccess(); else newRescueButton();
     } else {
         rescueFail(rescueRadius() > RESCUE_TARGET_R ? '¡TEMPRANO!' : '¡TARDE!');
@@ -2207,6 +2230,7 @@ function rescuePress(px, py) {
 }
 function rescueFail(msg) {
     rescue.active = false; rescue.phase = 'idle'; rescue.btn = null;
+    sfx('rescue_fail');
     showFeedback(msg + ' 💀');
     createExplosion(player.x + player.w / 2, player.y + player.h / 2, 0.2);
 }
@@ -2313,13 +2337,14 @@ function update() {
     const dtMs = Math.min(50, nowT - lastUpdateT); lastUpdateT = nowT; // el tiempo en pausa/apuntando no cuenta
     frameDtMs = dtMs;
     if (!gameActive) return;
+    if (window.SFX) window.SFX.mood(lava.active ? 'lava' : (darkLevel ? 'dark' : 'normal'));
     if (aim.active) { aim.update(); updateParticles(); return; } // mundo congelado mientras se apunta
     if (sling.active) { updateParticles(); return; }               // tirachinas: mundo congelado
     if (rescue.active) { updateRescue(dtMs); updateParticles(); return; } // rescate: mundo congelado
     if (maybeStartRescue()) { updateParticles(); return; }
     if (gravFlipT > 0) { // gravedad invertida: cuenta atrás
         gravFlipT -= dtMs;
-        if (gravFlipT <= 0) { gravFlipT = 0; showFeedback('⬇️ Gravedad normal'); }
+        if (gravFlipT <= 0) { gravFlipT = 0; showFeedback('⬇️ Gravedad normal'); sfx('gravity_off'); }
     }
     player.update();
     updateBombRocket();
@@ -2482,6 +2507,7 @@ function startGame(continueGame = false, cfg = null) {
     setLevelHUD();
     updateHeightDisplay();
     precisionSystem.spawnBall();
+    if (window.SFX) window.SFX.musicStart();
 }
 function endGame() { finishRun(false); }
 
@@ -2491,6 +2517,8 @@ function finishRun(completed) {
     if (runEnded) return;
     runEnded = true;
     gameActive = false;
+    sfx(completed ? 'win' : 'game_over');
+    if (window.SFX) window.SFX.musicStop();
     aim.cancel(); cancelSling(); gravFlipT = 0;
     resetRescue();
     // Muerte registrada para las lápidas de los demás (solo fase diaria y fases de la comunidad)
@@ -2530,6 +2558,7 @@ function finishRun(completed) {
 function goToMenu() {
     if (!runEnded && gameMode === 'normal' && window.BJFirebase) window.BJFirebase.reportRun(level, heightCm());
     runEnded = true; gameActive = false; bombActive = false; bombRocket = false;
+    if (window.SFX) window.SFX.musicStop();
     aim.cancel(); cancelSling(); cancelReels(); updateInventoryUI(); gravFlipT = 0;
     resetRescue(); tombstones = []; lava.active = false;
     modeCfg = null; gameMode = 'normal';
@@ -2688,6 +2717,7 @@ const game = {
         if (!gameActive || runEnded || aim.active || sling.active || rescue.active || !inventory[index]) return;
         const type = inventory[index];
         inventory.splice(index, 1);
+        sfx('item');
         updateInventoryUI();
 
         switch (type) {
@@ -2756,6 +2786,20 @@ if (homeFab) homeFab.addEventListener('click', () => {
 const settingsFab = document.getElementById('settings-fab');
 const settingsModal = document.getElementById('settings-modal');
 const closeSettingsBtn = document.getElementById('close-settings-btn');
+// Interruptores de sonido (se guardan en el navegador)
+(function () {
+    const mBtn = document.getElementById('snd-music'), fBtn = document.getElementById('snd-sfx');
+    if (!mBtn || !fBtn || !window.SFX) return;
+    const paintSnd = () => {
+        mBtn.textContent = '🎵 MÚSICA: ' + (window.SFX.musicEnabled() ? 'SÍ' : 'NO');
+        fBtn.textContent = '🔊 EFECTOS: ' + (window.SFX.sfxEnabled() ? 'SÍ' : 'NO');
+        mBtn.classList.toggle('active', window.SFX.musicEnabled());
+        fBtn.classList.toggle('active', window.SFX.sfxEnabled());
+    };
+    mBtn.addEventListener('click', () => { window.SFX.setMusic(!window.SFX.musicEnabled()); paintSnd(); });
+    fBtn.addEventListener('click', () => { window.SFX.setSfx(!window.SFX.sfxEnabled()); paintSnd(); });
+    paintSnd();
+})();
 const sideLeftBtn = document.getElementById('side-left');
 const sideRightBtn = document.getElementById('side-right');
 let settingsWasPlaying = false;
@@ -2846,6 +2890,7 @@ function showBoxIntro(key) {
     if (!m) return;
     if (boxIntroOpen) { boxIntroQueue.push(key); return; }
     boxIntroOpen = true; boxIntroWasActive = gameActive; gameActive = false;
+    sfx('unlock');
     aim.cancel(); cancelSling();
     openBoxIntro(key);
 }
