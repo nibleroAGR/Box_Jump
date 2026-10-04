@@ -1172,3 +1172,35 @@ button:disabled { opacity: 0.35; pointer-events: none; filter: grayscale(0.6); }
     box-shadow: 0 8px 18px rgba(255, 60, 60, 0.25) !important; }
 #settings-newgame-section { border-top: 1px solid rgba(255, 90, 90, 0.35); padding-top: 0.8rem; }
 #settings-newgame-section h3 { color: #ff8a8a; }
+
+/* ================= MULTIJUGADOR ================= */
+.mp-section { margin: 0.9rem 0 0.3rem; font-size: 0.8rem; opacity: 0.75; text-align: left; }
+.mp-friends { max-height: 38vh; overflow-y: auto; -webkit-overflow-scrolling: touch; }
+.mp-friend { display: flex; align-items: center; gap: 0.6rem; padding: 0.45rem 0.55rem; margin-bottom: 0.4rem;
+    border-radius: 12px; background: rgba(255, 255, 255, 0.05); }
+.mp-avatar-wrap { position: relative; flex: 0 0 38px; width: 38px; height: 38px; }
+.mp-avatar-wrap img { width: 38px; height: 38px; border-radius: 50%; object-fit: cover; background: #1e2d4d; }
+.mp-dot { position: absolute; right: -2px; bottom: -2px; width: 13px; height: 13px; border-radius: 50%; border: 2px solid #0b1328; }
+.mp-dot.on { background: #2ee66b; box-shadow: 0 0 8px #2ee66b; }
+.mp-dot.off { background: #ff4b4b; }
+.mp-name { flex: 1; min-width: 0; text-align: left; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mp-name small { display: block; font-weight: 400; font-size: 0.7rem; opacity: 0.6; }
+.mp-friend .mp-invite-btn { flex: 0 0 auto; width: auto; margin: 0; padding: 0.45rem 0.7rem; font-size: 0.75rem; }
+.mp-friend .mp-invite-btn:disabled { opacity: 0.35; }
+.mp-status { min-height: 1.2em; margin: 0.6rem 0 0.2rem; font-size: 0.85rem; color: #ffd08a; }
+#mp-screen { z-index: 230; }
+#mp-invite-modal { z-index: 280; background: rgba(5, 11, 24, 0.88); backdrop-filter: blur(10px); }
+.mp-inv-photo { width: 76px; height: 76px; border-radius: 50%; object-fit: cover; border: 3px solid #ff4d6d; background: #1e2d4d; }
+.mp-inv-text { margin: 0.7rem 0 0.2rem; font-size: 1.05rem; }
+.mp-inv-timer { font-size: 0.85rem; opacity: 0.7; margin-bottom: 0.4rem; }
+#mp-vs-screen { z-index: 275; background: rgba(5, 11, 24, 0.95); backdrop-filter: blur(14px); }
+.vs-row { display: flex; align-items: center; justify-content: center; gap: 0.8rem; margin: 0.5rem 0 1rem; }
+.vs-player { display: flex; flex-direction: column; align-items: center; gap: 0.45rem; width: 110px; }
+.vs-player img { width: 84px; height: 84px; border-radius: 50%; object-fit: cover; border: 3px solid #00f2ff; background: #1e2d4d;
+    box-shadow: 0 0 18px rgba(0, 242, 255, 0.45); }
+.vs-player.opp img { border-color: #ff4d6d; box-shadow: 0 0 18px rgba(255, 77, 109, 0.45); }
+.vs-player span { font-weight: 700; font-size: 0.9rem; overflow-wrap: anywhere; }
+.vs-mid { font-size: 2rem; font-weight: 900; color: #ffd23f; text-shadow: 0 0 14px rgba(255, 210, 63, 0.6); }
+.vs-count { font-size: 3.6rem; font-weight: 900; line-height: 1; margin: 0.2rem 0 0.6rem; }
+.vs-names { font-size: 0.85rem; opacity: 0.8; }
+#mp-result-screen { z-index: 270; }

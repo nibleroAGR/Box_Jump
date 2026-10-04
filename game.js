@@ -248,9 +248,9 @@ const BOX_TYPES = {
     normal: { name: 'Clásica',  wind: 1,   grav: 1,   desc: 'Equilibrada y sin trucos.' },
     heavy:  { name: 'Pesada',   wind: 0,   grav: 1,   desc: 'Ignora el viento por completo.' },
     light:  { name: 'Ligera',   wind: 1.3, grav: 0.6, desc: 'Planea: cae muy despacio, pero el viento la empuja más.' },
-    rubber: { name: 'Goma',     wind: 1,   grav: 1,   desc: 'Rebota al caer y en las paredes. Toca la caja (1 vez por nivel) y bota como un resorte.' },
+    rubber: { name: 'Goma',     wind: 1,   grav: 1,   desc: 'Se aplasta al caer y rebota en las paredes. Toca la caja (1 vez por nivel) y bota como un resorte.' },
     sticky: { name: 'Pegajosa', wind: 1,   grav: 1,   desc: 'Se pega a la plataforma donde aterriza, sea cual sea la inercia o el tipo de plataforma.' },
-    bomb:   { name: 'Bomba',    wind: 1,   grav: 1,   desc: 'Tienes 20 s por nivel para llegar a la meta. Si la desactivas, sale disparada como un cohete, explota y aparece otra caja.' },
+    bomb:   { name: 'Bomba',    wind: 1,   grav: 1,   desc: 'Tienes 20 s por nivel para llegar a la meta o explota. Si llegas, sale disparada como un cohete, estalla en fuegos artificiales y aparece otra caja.' },
     gravity: { name: 'Gravitatoria', wind: 1, grav: 1, desc: 'Toca la caja (1 vez por nivel) y la gravedad del nivel se invierte durante 3 s: la caja flota hacia arriba.' },
     mystery: { name: 'Misteriosa', wind: 1, grav: 1,  desc: 'Se comporta como otra caja al azar... pero no te dice cuál.' },
 };
@@ -315,7 +315,7 @@ function setActiveBox(key) {
     gravFlipT = 0;
     if (key === 'mystery') pickMysteryBehavior();
     placeOnPlatform();
-    if (unlockBox(key)) showBoxIntro(key); // primera vez que aparece: cuadro informativo
+    if (unlockBox(key) && gameMode !== 'race') showBoxIntro(key); // primera vez que aparece: cuadro informativo (en carrera no se pausa)
 }
 // Coloca la caja sobre la plataforma en la que está
 function placeOnPlatform() {
@@ -383,19 +383,24 @@ function bombTargetPlatform() {
 }
 function bombExplode() {
     bombRocket = false; player.rocket = false;
+    // fuegos artificiales al llegar
+    const cx = player.x + player.w / 2, cy = player.y + player.h / 2;
+    spawnFirework(cx, cy, true);
+    setTimeout(() => { spawnFirework(cx - 70, cy - 60, false); sfx('explosion'); }, 180);
+    setTimeout(() => { spawnFirework(cx + 70, cy - 90, false); sfx('rescue_win'); }, 360);
+    sfx('explosion');
+    if (navigator.vibrate) { try { navigator.vibrate(40); } catch (e) { /* sin vibración */ } }
     const next = rollRandomBox(boxType);
     setActiveBox(next);
-    showFeedback('💥 ¡LA BOMBA ESTALLA!\n📦 Nueva caja: ' + boxLabel(next));
+    showFeedback('🎆 ¡LA BOMBA ESTALLA!\n📦 Nueva caja: ' + boxLabel(next));
 }
 function launchBombRocket() {
-    const cx = player.x + player.w / 2, cy = player.y + player.h / 2;
-    createExplosion(cx, cy, 2.5); createExplosion(cx, cy, 1.2);
-    sfx('explosion'); sfx('rocket');
-    if (navigator.vibrate) { try { navigator.vibrate(60); } catch (e) { /* sin vibración */ } }
+    sfx('rocket');
+    createExplosion(player.x + player.w / 2, player.y + player.h, 0.8); // impulso del despegue
     const t = bombTargetPlatform();
     if (!t) { bombExplode(); return; }
     bombRocket = true; player.rocket = true;
-    showFeedback('💣💥 ¡BOMBA DESACTIVADA!\nSales disparado');
+    showFeedback('💣🚀 ¡BOMBA DESACTIVADA!\nSales disparado');
     flyTo(t, 1100, 'bomb', bombExplode);
 }
 function updateBombRocket() { /* el vuelo lo gestiona flyTo / updateRescue */ }
@@ -1305,12 +1310,12 @@ function initPlatforms(startLevel = 1) {
     originY = null; player.rocket = false;
     level = Math.max(1, startLevel);
     runFirstLevel = level; rubberBoostUsed = false; gravBoostUsed = false; gravFlipT = 0; bombRocket = false;
-    boxType = chosenBox; if (boxType === 'mystery') pickMysteryBehavior(); // la caja elegida vale para los 3 primeros niveles
+    boxType = (modeCfg && modeCfg.box) || chosenBox; if (boxType === 'mystery') pickMysteryBehavior(); // la caja elegida vale para los 3 primeros niveles
     cameraScroll = 0;
     platformsInLevel = levelPlatformCount();
     platformsReached = 0; totalPlatformGlobalCount = 0;
     combo = 0; rollEnvironment(false);
-    hasShield = false; rocketJumps = 0;
+    hasShield = false; rocketJumps = 0; bombDying = 0;
     cancelReels(); inventory = []; chests = []; tombstones = []; usedTombPhrases.clear(); lastPlatIdx = 0; resetRescue(); armBomb(); updateInventoryUI();
     ballSpeedFactor = 1.0; greenPowerActive = 0; platformItemActive = false; bombActive = false;
     if (clockTimeoutId) { clearTimeout(clockTimeoutId); clockTimeoutId = null; }
@@ -1814,14 +1819,8 @@ function checkCollisions() {
             const impact = player.vy;
             player.y = p.y - player.h;
             let bounced = false;
-            if (boxKind() === 'rubber' && impact > 6 && player.bouncesLeft > 0) { // caja de goma: rebota (cada vez menos)
-                bounced = true; player.bouncesLeft--;
-                player.vy = -impact * 0.45; player.vx *= 0.25; player.angularVelocity = 0;
-                player.squash = 1;
-                createExplosion(player.x + player.w / 2, p.y, 0.3);
-            } else if (boxKind() === 'rubber') {
-                player.bouncesLeft = 2;
-                if (impact > 3) player.squash = Math.min(1, impact / 12);
+            if (boxKind() === 'rubber' && impact > 2) { // caja de goma: no rebota (se caería de las móviles), solo se aplasta un poco
+                player.squash = Math.min(0.8, impact / 12);
             }
             if (boxKind() === 'heavy' && impact > 8) landingBurst(p, '#9aa7ba', 10); // caja pesada: nube de polvo
             player.onGround = !bounced;
@@ -1943,6 +1942,8 @@ function landingBurst(p, color, n) {
 }
 
 // ===================== BOMBA: 20 s POR NIVEL =====================
+const BOMB_DEATH_WAIT_MS = 3000; // tras explotar se esperan 3 s antes de terminar
+let bombDying = 0;             // ms que quedan de la explosión final (la caja ya no está)
 const MYSTERY_BOMB_WARN = 5; // la misteriosa-bomba se descubre en los últimos 5 s
 function updateBombBox(dtSec) {
     if (boxKind() !== 'bomb' || runEnded) return;
@@ -1957,9 +1958,14 @@ function updateBombBox(dtSec) {
     if (hasShield) {
         sfx('shield'); hasShield = false; armBomb(); bombFuse = BOMB_FUSE_SECONDS / 2;
         showFeedback('💥 ¡LA BOMBA ESTALLA!\nEl escudo te salva (' + Math.round(BOMB_FUSE_SECONDS / 2) + ' s más)');
-    } else {
-        showFeedback('💥 ¡BOOM!');
-        endGame();
+    } else { // la bomba revienta: la caja desaparece y se esperan 3 s
+        const cx = player.x + player.w / 2, cy = player.y + player.h / 2;
+        createExplosion(cx, cy, 2.5); createExplosion(cx, cy, 1.5);
+        sfx('explosion');
+        if (navigator.vibrate) { try { navigator.vibrate([80, 40, 120]); } catch (e) { /* sin vibración */ } }
+        showFeedback('💥 ¡BOOM! La bomba ha explotado');
+        bombDying = BOMB_DEATH_WAIT_MS;
+        aim.cancel(); cancelSling();
     }
 }
 function drawBombRing() {
@@ -1976,7 +1982,7 @@ function drawBombRing() {
 }
 
 // ===================== LAVA ASCENDENTE =====================
-const isLavaLevel = () => (gameMode === 'normal' || gameMode === 'daily') && level % LAVA_EVERY === 0;
+const isLavaLevel = () => (gameMode === 'normal' || gameMode === 'daily' || gameMode === 'race') && level % LAVA_EVERY === 0;
 
 function setupLava(silent) {
     lava.active = isLavaLevel();
@@ -2063,6 +2069,12 @@ function drawStatusHUD() {
         const pulse = 0.65 + 0.35 * Math.sin(performance.now() / (danger ? 90 : 220));
         ctx.fillStyle = `rgba(255,${danger ? 70 : 150},40,${pulse})`;
         ctx.fillText('🌋 LA LAVA SUBE EN ' + t.toFixed(1) + ' s', width / 2, y);
+        y += 20;
+    }
+    if (ghost && gameMode === 'race' && modeCfg) {
+        const mine = level - modeCfg.first + 1, his = Math.max(1, Math.min(modeCfg.total, (ghost.level || modeCfg.first) - modeCfg.first + 1));
+        ctx.fillStyle = his > mine ? '#ff8a8a' : (his < mine ? '#7dff6b' : '#cfd8ee');
+        ctx.fillText('⚔️ ' + (ghost.name || 'Rival') + ': nivel ' + his + '/' + modeCfg.total, width / 2, y);
         y += 20;
     }
     if (gravFlipT > 0) {
@@ -2407,6 +2419,43 @@ function drawRescue() {
     ctx.restore();
 }
 
+// ===================== FANTASMA DEL RIVAL (multijugador) =====================
+// El rival se ve en modo sombra. Su posición llega como (nivel, altura sobre la salida del nivel, x relativa).
+let ghost = null; // { name, level, hgt, xf, rot, box, dx, dy } (dx/dy: posición suavizada en pantalla)
+function setGhost(st) {
+    if (!st) { ghost = null; return; }
+    if (!ghost) ghost = {};
+    Object.assign(ghost, st);
+}
+function raceSnapshot() {
+    return {
+        level, hgt: Math.round(cameraScroll - (player.y + player.h) - levelBaseH),
+        xf: +(player.x / Math.max(1, width - player.w)).toFixed(4), rot: +player.rotation.toFixed(2),
+        box: boxType, alive: !runEnded && !bombDying,
+    };
+}
+function drawGhost() {
+    if (!ghost || gameMode !== 'race') return;
+    if (ghost.level !== level || ghost.alive === false) { delete ghost.dx; return; }
+    const tx = ghost.xf * (width - player.w);
+    const ty = cameraScroll - levelBaseH - ghost.hgt - player.h;
+    if (ghost.dx === undefined || Math.abs(ty - ghost.dy) > height) { ghost.dx = tx; ghost.dy = ty; }
+    ghost.dx += (tx - ghost.dx) * 0.25; ghost.dy += (ty - ghost.dy) * 0.25; // movimiento suave entre mensajes
+    if (ghost.dy < -60 || ghost.dy > height + 60) return;
+    ctx.save();
+    ctx.globalAlpha = 0.38;
+    ctx.translate(ghost.dx + player.w / 2, ghost.dy + player.h / 2);
+    ctx.rotate(ghost.rot || 0);
+    ctx.filter = 'grayscale(1)';
+    drawBoxShape(ctx, BOX_TYPES[ghost.box] ? ghost.box : 'normal', player.w, player.h, performance.now(), {});
+    ctx.restore();
+    ctx.save();
+    ctx.globalAlpha = 0.75; ctx.fillStyle = '#cfd8ee'; ctx.textAlign = 'center';
+    ctx.font = 'bold 11px Outfit, Inter, sans-serif';
+    ctx.fillText('👻 ' + (ghost.name || 'Rival'), ghost.dx + player.w / 2, ghost.dy - 8);
+    ctx.restore();
+}
+
 // --- CÁMARA en saltos muy grandes ---
 // La plataforma de la que sale el jugador se mantiene visible abajo del todo
 // mientras dure el salto (sin zoom). Se sigue la plataforma aunque desaparezca.
@@ -2417,6 +2466,11 @@ let originY = null;
 function update(dtMs = STEP_MS) {
     frameDtMs = dtMs;
     if (!gameActive) return;
+    if (bombDying > 0) { // la caja ha explotado: solo se ven las partículas durante 3 s
+        bombDying -= dtMs; updateParticles();
+        if (bombDying <= 0) { bombDying = 0; endGame(); }
+        return;
+    }
     if (window.SFX) window.SFX.mood(lava.active ? 'lava' : (darkLevel ? 'dark' : 'normal'));
     if (aim.active) { aim.update(); updateParticles(); return; } // mundo congelado mientras se apunta
     if (sling.active) { updateParticles(); return; }               // tirachinas: mundo congelado
@@ -2528,7 +2582,8 @@ function draw() {
     props.forEach(pr => pr.draw());
     obstacles.forEach(o => o.draw());
     drawLava();
-    player.draw();
+    if (!bombDying) player.draw(); // tras explotar la bomba la caja ya no está
+    drawGhost();
     drawBombRing();
     drawSling();
 
@@ -2603,7 +2658,7 @@ function startGame(continueGame = false, cfg = null) {
     if (rankingFab) rankingFab.classList.remove('hidden');
 
     const resume = !cfg && continueGame && savedGameData && savedGameData.level > 1;
-    initPlatforms(cfg ? cfg.first : (resume ? savedGameData.level : 1));
+    initPlatforms(cfg ? (cfg.startAt || cfg.first) : (resume ? savedGameData.level : 1));
     setLevelHUD();
     updateHeightDisplay();
     precisionSystem.spawnBall();
@@ -2613,8 +2668,20 @@ function endGame() { finishRun(false); }
 
 // Fin de partida (derrota o fase completada). En los modos especiales, el modo decide
 // qué se guarda y qué botones aparecen (modeCfg.onEnd).
+let respawnTimer = null;
 function finishRun(completed) {
     if (runEnded) return;
+    // Carrera multijugador: al caer se reaparece en el mismo nivel a los 3 s
+    if (!completed && modeCfg && modeCfg.respawn) {
+        runEnded = true; gameActive = false;
+        aim.cancel(); cancelSling(); gravFlipT = 0; resetRescue();
+        showFeedback('💀 ¡HAS CAÍDO!\nReapareces en 3 s');
+        sfx('miss');
+        const cfg = modeCfg, lv = level;
+        clearTimeout(respawnTimer);
+        respawnTimer = setTimeout(() => { respawnTimer = null; if (modeCfg === cfg) startGame(false, Object.assign({}, cfg, { startAt: lv })); }, 3000);
+        return;
+    }
     runEnded = true;
     gameActive = false;
     sfx(completed ? 'win' : 'game_over');
@@ -2639,6 +2706,7 @@ function finishRun(completed) {
         window.BJFirebase.reportRun(level, finalHeight);
     }
 
+    if (info.silent) return; // el modo muestra su propia pantalla (carrera)
     goTitle.innerText = info.title || (completed ? '¡FASE COMPLETADA!' : 'FIN DEL JUEGO');
     goNote.innerText = info.note || '';
     goNote.classList.toggle('hidden', !info.note);
@@ -2655,6 +2723,7 @@ function finishRun(completed) {
 
 // Vuelve al menú principal (abandona la partida en curso)
 function goToMenu() {
+    clearTimeout(respawnTimer); respawnTimer = null; ghost = null; bombDying = 0;
     if (!runEnded && gameMode === 'normal' && window.BJFirebase) window.BJFirebase.reportRun(level, heightCm());
     runEnded = true; gameActive = false; bombActive = false; bombRocket = false;
     if (window.SFX) window.SFX.musicStop();
@@ -2706,7 +2775,7 @@ window.addEventListener('resize', resize);
 resize();
 startBtn.addEventListener('click', () => askStart(() => startGame(true)));
 if (newGameBtn) newGameBtn.addEventListener('click', () => askStart(() => startGame(false)));
-restartBtn.addEventListener('click', () => (modeCfg ? startGame(false, modeCfg) : startGame(true)));
+restartBtn.addEventListener('click', () => (modeCfg ? (modeCfg.respawn ? null : startGame(false, modeCfg)) : startGame(true)));
 if (goMenuBtn) goMenuBtn.addEventListener('click', goToMenu);
 
 // Punto tocado en coordenadas del canvas (ratón o dedo); clientX = 0 también es válido
@@ -3004,6 +3073,9 @@ window.BJGame = {
     toMenu: goToMenu,
     mapX,
     getSide: () => precisionSystem.side,
+    setGhost, raceSnapshot,
+    isPlaying: () => gameActive && !runEnded,
+    mode: () => gameMode,
 };
 
 // --- Cuadro "NUEVA CAJA": primera vez que aparece una caja (pausa la partida mientras se lee) ---

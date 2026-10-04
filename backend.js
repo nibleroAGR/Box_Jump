@@ -108,7 +108,7 @@
         return 'data:image/svg+xml;utf8,' + encodeURIComponent(svg);
     }
     let activeRankingTab = 'global';   // 'global' | 'friends'
-    let activeRankingScope = 'general'; // 'daily' (ranking del día) | 'general'
+    let activeRankingScope = 'general'; // 'daily' (ranking del día) | 'general' | 'multi' (multijugador)
 
     const AUTH_ERRORS = {
         'auth/popup-closed-by-user': 'Has cerrado la ventana de Google antes de terminar.',
@@ -373,6 +373,11 @@
         return snap.docs.map((d) => ({ uid: d.id, ...d.data() }));
     }
 
+    async function fetchMultiTop(n) {
+        const snap = await users().orderBy('mpWins', 'desc').limit(n).get();
+        return snap.docs.map((d) => ({ uid: d.id, ...d.data() })).filter((u) => (u.mpWins || 0) > 0 || (u.mpPlayed || 0) > 0);
+    }
+
     async function fetchFriendsTop() {
         if (!currentUser) return [];
         const mySnap = await users().doc(currentUser.uid).get();
@@ -438,7 +443,9 @@
         }
         items.forEach((it, i) => {
             const safeName = (it.username || it.displayName || 'Jugador').replace(/[<>&]/g, '');
-            const score = kind === 'daily'
+            const score = kind === 'multi'
+                ? `<small class="rank-level">${it.mpPlayed || 0} carreras</small>${it.mpWins || 0} 🏆`
+                : kind === 'daily'
                 ? `<small class="rank-level">${it.completed ? '✔ ' + DAILY_TOTAL : 'Nv ' + Math.min(DAILY_TOTAL, (it.cleared || 0) + 1)}/${DAILY_TOTAL}</small>${it.height || 0} cm`
                 : `<small class="rank-level">Nv ${it.bestLevel || 1}</small>${it.bestHeight || 0} cm`;
             const row = document.createElement('div');
@@ -476,21 +483,27 @@
         dom.rankingList.innerHTML = '<p class="ranking-empty">Cargando...</p>';
         const isGlobal = activeRankingTab === 'global';
         const daily = activeRankingScope === 'daily';
+        const multi = activeRankingScope === 'multi';
         dom.addFriendRow.classList.toggle('hidden', isGlobal);
         if (dom.rankingNote) {
-            dom.rankingNote.textContent = daily
+            dom.rankingNote.textContent = multi
+                ? 'Carreras multijugador: cuenta el número de victorias.'
+                : daily
                 ? `Fase diaria de hoy (${dailyKey()}). Las copas de oro, plata y bronce solo se dan con ${MIN_PLAYERS_FOR_CUP} jugadores o más.`
                 : `Clasificación general. Las copas solo se muestran con ${MIN_PLAYERS_FOR_CUP} jugadores o más.`;
         }
         renderTrophyBar();
         try {
             let items;
-            if (daily) items = isGlobal ? await getDailyTop(dailyKey(), 20) : await getDailyFriends(dailyKey());
+            if (multi) items = isGlobal ? await fetchMultiTop(20) : (await fetchFriendsTop()).sort((a, b) => (b.mpWins || 0) - (a.mpWins || 0) || (a.mpPlayed || 0) - (b.mpPlayed || 0));
+            else if (daily) items = isGlobal ? await getDailyTop(dailyKey(), 20) : await getDailyFriends(dailyKey());
             else items = isGlobal ? await fetchGlobalTop(20) : await fetchFriendsTop();
-            const emptyMsg = daily
+            const emptyMsg = multi
+                ? (isGlobal ? 'Nadie ha ganado una carrera todavía. ¡Sé el primero!' : 'Añade amigos con su código y rétalos a una carrera.')
+                : daily
                 ? (isGlobal ? 'Nadie ha jugado hoy la fase diaria todavía. ¡Sé el primero!' : 'Ni tú ni tus amigos habéis jugado la fase de hoy todavía.')
                 : (isGlobal ? 'Aún no hay marcas. ¡Sé el primero!' : 'Añade amigos con su código para ver su clasificación aquí.');
-            renderRankingRows(items, emptyMsg, daily ? 'daily' : 'general');
+            renderRankingRows(items, emptyMsg, multi ? 'multi' : (daily ? 'daily' : 'general'));
         } catch (err) {
             console.error('Error al cargar la clasificación:', err);
             dom.rankingList.innerHTML = '<p class="ranking-empty">Error al cargar la clasificación.</p>';
@@ -499,11 +512,12 @@
 
     // scope: 'daily' (fase diaria de hoy) o 'general'. Siempre se abre en GLOBAL; el jugador cambia a AMIGOS.
     function openRankingModal(scope) {
-        activeRankingScope = scope === 'daily' ? 'daily' : 'general';
+        activeRankingScope = (scope === 'daily' || scope === 'multi') ? scope : 'general';
         activeRankingTab = 'global';
         dom.tabGlobal.classList.add('active');
         dom.tabFriends.classList.remove('active');
-        if (dom.rankingTitle) dom.rankingTitle.textContent = activeRankingScope === 'daily' ? '📅 FASE DIARIA · HOY' : '🏆 CLASIFICACIÓN GENERAL';
+        if (dom.rankingTitle) dom.rankingTitle.textContent = activeRankingScope === 'multi' ? '⚔️ MULTIJUGADOR'
+            : (activeRankingScope === 'daily' ? '📅 FASE DIARIA · HOY' : '🏆 CLASIFICACIÓN GENERAL');
         dom.rankingModal.classList.remove('hidden');
         window.__bjOpenRanking && window.__bjOpenRanking();
         refreshRankingView();
@@ -550,6 +564,43 @@
         showAuthError(err);
     });
 
+    // ---------- Presencia (círculo verde / rojo en la lista de amigos) ----------
+    const PRESENCE_EVERY_MS = 30000;
+    let presenceTimer = null;
+    function presenceBeat() {
+        if (!currentUser || document.hidden) return;
+        users().doc(currentUser.uid).set({ lastSeen: firebase.firestore.FieldValue.serverTimestamp() }, { merge: true })
+            .catch((e) => console.warn('Presencia no actualizada:', e));
+    }
+    function startPresence() {
+        stopPresence();
+        presenceBeat();
+        presenceTimer = setInterval(presenceBeat, PRESENCE_EVERY_MS);
+    }
+    function stopPresence() { if (presenceTimer) { clearInterval(presenceTimer); presenceTimer = null; } }
+    document.addEventListener('visibilitychange', () => { if (!document.hidden) presenceBeat(); });
+
+    // Amigos con su estado de conexión
+    async function friendsWithPresence() {
+        if (!currentUser) return [];
+        const ids = await myFriendUids();
+        const docs = await Promise.all(ids.map((id) => users().doc(id).get().catch(() => null)));
+        return docs.filter((d) => d && d.exists).map((d) => {
+            const v = d.data();
+            const seen = v.lastSeen && v.lastSeen.toMillis ? v.lastSeen.toMillis() : 0;
+            return { uid: d.id, username: v.username || v.displayName || 'Jugador', photoURL: v.photoURL || '', lastSeenMs: seen };
+        });
+    }
+    // Resultado de una carrera: cada jugador suma en su propio perfil
+    async function recordRaceResult(won) {
+        if (!currentUser) return;
+        const inc = firebase.firestore.FieldValue.increment;
+        const patch = { mpPlayed: inc(1) };
+        if (won) patch.mpWins = inc(1);
+        try { await users().doc(currentUser.uid).set(patch, { merge: true }); }
+        catch (e) { console.error('No se pudo guardar el resultado de la carrera:', e); }
+    }
+
     function signOutUser() {
         auth.signOut().catch((err) => console.error('Error al cerrar sesión:', err));
     }
@@ -561,6 +612,7 @@
         currentUser = user;
 
         if (!user) {
+            stopPresence();
             dom.loginBlock.classList.remove('hidden');
             dom.profileBlock.classList.add('hidden');
             dom.rankingModal.classList.add('hidden');
@@ -585,6 +637,7 @@
             showFriendCode(profile.friendCode || profile.username || '');
             dom.profileName.innerText = profile.username || user.displayName || 'Jugador';
             dom.profileAvatar.src = profile.photoURL || avatarFor(profile.username || user.email);
+            startPresence();
             checkTrophies().then(showTrophyBanner).catch((err) => console.warn('Copas no disponibles:', err));
             window.dispatchEvent(new CustomEvent('bj-auth-changed', {
                 detail: {
@@ -915,6 +968,9 @@
         reportRun,
         saveProgress, resetProgress,
         openRanking: (scope) => openRankingModal(scope),
+        // multijugador
+        db: () => db, serverTs: () => firebase.firestore.FieldValue.serverTimestamp(),
+        identity: () => myIdentity(), friendsWithPresence, myFriendUids, recordRaceResult, dailyKey: () => dailyKey(),
         uid: () => (currentUser ? currentUser.uid : null),
         reportDaily, getDailyTop, getMyDaily, getDailyFriends, checkTrophies,
         reportDeath, getDeaths,
