@@ -1370,3 +1370,4 @@ button:disabled { box-shadow: none; }
     display: block; margin-top: 0.35rem; font-family: 'Outfit', sans-serif; font-weight: 600;
     font-size: 0.95rem; letter-spacing: 0; color: #eef1ff; text-shadow: 0 2px 8px rgba(0, 0, 0, 0.6);
 }
+.build-tag { margin-top: 0.6rem; font-size: 0.65rem; color: var(--mist); opacity: 0.4; }
