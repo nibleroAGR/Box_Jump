@@ -115,12 +115,18 @@ function rollEnvironment(allowGravity) {
         const d = customLevelData();
         windForce = (d.wind || 0) * 0.028;
         gravityFactor = d.lowG ? 0.4 : 1.0;
-        darkLevel = false;
+        darkLevel = false; motherLevel = false;
         return;
     }
-    windForce = rollWind(genRng);
-    gravityFactor = (allowGravity && level >= 30 && genRng() < 0.3) ? 0.4 : 1.0; // Baja gravedad ocasional en modo Caos
-    darkLevel = level >= 2 && genRng() < DARK_CHANCE; // niebla: 10 % de probabilidad por nivel
+    // Tiradas siempre en el mismo orden (misma fase diaria para todos)
+    const wind = rollWind(genRng), rGrav = genRng(), rDark = genRng(), rMother = genRng();
+    windForce = 0; gravityFactor = 1.0; darkLevel = false; motherLevel = false;
+    // Solo UN tipo de fase especial por nivel. Prioridad: lava > nave nodriza > niebla > viento > gravedad baja
+    if (isLavaLevel()) return;                                                       // lava (cada 10 niveles)
+    if (specialModes() && level >= MOTHER_MIN_LEVEL && rMother < MOTHER_CHANCE) motherLevel = true; // 10 %
+    else if (level >= 2 && rDark < DARK_CHANCE) darkLevel = true;                    // niebla 10 %
+    else if (wind) windForce = wind;                                                 // viento (nivel 12+)
+    else if (allowGravity && level >= 30 && rGrav < 0.3) gravityFactor = 0.4;        // gravedad baja (modo Caos)
 }
 function buildCustomLevel() {
     const d = customLevelData();
@@ -136,7 +142,7 @@ function buildCustomLevel() {
         const cx = mapX(it.fx, 0, width, precisionSystem.side), y = baseY - it.y;
         if (it.k === 'drone') obstacles.push(new Obstacle({ patrol: true, x: cx - 20, y: y - 10, dir: it.fx < 0.5 ? 1 : -1 }));
         else if (it.k === 'shield' || it.k === 'dj') powerups.push(new PowerUp(cx - 14, y - 14, it.k === 'shield' ? 'shield' : 'rocket')); // 'dj' antiguo = cohete
-        else if (it.k === 'hole') blackHoles.push(new BlackHole(cx, y, it.w || 35));
+        // ('hole' = agujero negro: eliminado del juego, se ignora en fases antiguas)
         else if (it.k === 'box') { const sz = it.w || 24; props.push(new Prop(cx - sz / 2, y - sz / 2, sz, sz, 'hsl(215, 80%, 60%)')); }
         else if (it.k === 'chest') { // se pega a la plataforma más cercana en altura
             const target = platforms.slice(1).reduce((b, q) => (!b || Math.abs(q.y - y) < Math.abs(b.y - y) ? q : b), null);
@@ -351,13 +357,37 @@ function flyTo(t, dur, kind, onLand) {
 
 // --- Escudo: al caer, se convierte en una plataforma en el centro de la pantalla y la caja vuela hasta ella ---
 const SHIELD_PLAT_W = 120;
+const SHIELD_GOAL_GAP = 130;   // la plataforma del escudo queda siempre al menos esto por DEBAJO de la meta
+// Sitio para la plataforma del escudo: centro de la pantalla, salvo que la meta esté a esa altura o más
+// abajo (entonces se pone por debajo de la meta, bajando la cámara si hace falta). Así la meta siempre
+// queda por encima y se puede saltar a ella. En horizontal, donde no choque con otra plataforma.
+function shieldSpot() {
+    const goal = platforms.find((p) => p.isGoal && !p.isBroken);
+    let y = Math.round(height * 0.5);
+    if (goal && goal.y > y - SHIELD_GOAL_GAP) y = Math.round(goal.y + SHIELD_GOAL_GAP);
+    const maxY = height - 90;
+    if (y > maxY) { shiftWorld(-(y - maxY)); y = maxY; } // sube el mundo: la meta sigue por encima
+    const W = SHIELD_PLAT_W, bar = precisionSystem.canal;
+    const minX = precisionSystem.side === 'left' ? bar.x + bar.w + 10 : 10;
+    const maxX = (precisionSystem.side === 'right' ? bar.x - 10 : width - 10) - W;
+    const xs = [width / 2 - W / 2, minX, maxX, (minX + width / 2 - W / 2) / 2, (maxX + width / 2 - W / 2) / 2];
+    const clash = (x) => platforms.reduce((n, p) => {
+        if (p.isBroken || Math.abs(p.y - y) > 70) return n;
+        const pw = p.type === 'temp_full' ? width : p.w;
+        return n + (x < p.x + pw + 12 && x + W > p.x - 12 ? 1 : 0);
+    }, 0);
+    let best = xs[0], bestN = clash(best);
+    for (const x of xs.slice(1)) { const n = clash(x); if (n < bestN) { best = x; bestN = n; } }
+    return { x: Math.max(0, Math.min(width - W, best)), y };
+}
 function shieldSave(msg) {
     sfx('shield');
     hasShield = false;
-    const y = Math.round(height * 0.5);
-    const sp = new Platform(width / 2 - SHIELD_PLAT_W / 2, y, SHIELD_PLAT_W, 20, false, 'shield');
+    const spot = shieldSpot();
+    const y = spot.y;
+    const sp = new Platform(spot.x, y, SHIELD_PLAT_W, 20, false, 'shield');
     platforms.push(sp);
-    createExplosion(width / 2, y, 1.0);
+    createExplosion(spot.x + SHIELD_PLAT_W / 2, y, 1.0);
     addFlash(0.3, '0,255,120');
     showFeedback(msg || '🛡️ ¡EL ESCUDO TE SALVA!');
     flyTo(sp, 650, 'shield');
@@ -539,6 +569,119 @@ function drawBoxShape(c, type, w, h, t, o = {}) {
 }
 
 // ===================== LAVA ASCENDENTE (cada 10 niveles) =====================
+// --- NAVE NODRIZA ---
+// Fase especial (10 %, desde el nivel MOTHER_MIN_LEVEL): una nave el triple de grande que un dron vigila
+// la parte de arriba de la pantalla (aunque la caja suba, ella vuelve siempre arriba). Fija una zona con un
+// rayo fino y, a los 4 s, un láser grande destruye todas las plataformas de esa zona (menos la meta y el
+// escudo). No mata: solo elimina plataformas. En esta fase no hay drones ni plataformas que desaparecen.
+const MOTHER_CHANCE = 0.10;
+const MOTHER_MIN_LEVEL = 5;
+const MOTHER_W = 120, MOTHER_H = 60;    // el triple que un dron (40 x 20)
+const MOTHER_AIM_S = 4;                 // segundos que avisa el rayo fino antes del láser
+const MOTHER_ZONE_W = 110;              // ancho de la zona que barre el láser
+const MOTHER_BEAM_S = 0.6;              // duración visual del láser grande
+let motherLevel = false;
+const mother = { active: false, x: 0, y: 0, tx: 0, state: 'move', t: 0, zoneX: 0, rnd: Math.random, wait: 0 };
+const motherTopY = () => 92;            // altura fija (pantalla) bajo el marcador
+const motherZone = () => [mother.zoneX - MOTHER_ZONE_W / 2, mother.zoneX + MOTHER_ZONE_W / 2];
+const inMotherZone = (p) => { const [a, b] = motherZone(), pw = p.type === 'temp_full' ? width : p.w; return p.x < b && p.x + pw > a; };
+const motherCanHit = (p) => !p.isBroken && !p.isGoal && p.type !== 'shield' && p.y > mother.y && inMotherZone(p);
+
+function setupMother(silent) {
+    mother.active = motherLevel;
+    platforms.forEach((p) => { p.rayT = 0; });
+    if (!mother.active) return;
+    mother.rnd = mulberry32(Math.floor(genRng() * 4294967296) >>> 0); // misma nave para todos en la fase diaria
+    mother.x = width / 2 - MOTHER_W / 2; mother.y = -MOTHER_H - 20; // entra desde arriba
+    mother.state = 'move'; mother.t = 0; mother.wait = 1.5;
+    mother.tx = motherPickX();
+    if (!silent) showFeedback('🛸 ¡NAVE NODRIZA!\nHuye de la zona marcada');
+}
+function motherPickX() {
+    const zx = MOTHER_ZONE_W / 2 + mother.rnd() * (width - MOTHER_ZONE_W);
+    return Math.max(0, Math.min(width - MOTHER_W, zx - MOTHER_W / 2));
+}
+function updateMother(dt) {
+    if (!mother.active || runEnded) return;
+    mother.y += (motherTopY() - mother.y) * 0.06;  // siempre vuelve a la parte de arriba de la pantalla
+    if (mother.state === 'move') {
+        mother.wait -= dt;
+        const dx = mother.tx - mother.x, sp = Math.min(3.2, 1.8 + level * 0.04);
+        if (Math.abs(dx) > sp) mother.x += Math.sign(dx) * sp; else mother.x = mother.tx;
+        if (mother.x === mother.tx && mother.wait <= 0) { // fija la zona: rayo fino de aviso
+            mother.state = 'aim'; mother.t = 0;
+            mother.zoneX = mother.x + MOTHER_W / 2;
+            sfx('ray');
+        }
+    } else if (mother.state === 'aim') {
+        mother.t += dt;
+        const k = Math.min(1, mother.t / MOTHER_AIM_S);
+        platforms.forEach((p) => { p.rayT = motherCanHit(p) ? k : 0; });
+        if (mother.t >= MOTHER_AIM_S) { // ¡LÁSER!
+            platforms.forEach((p) => {
+                if (motherCanHit(p)) { p.isBroken = true; createExplosion(p.x + p.w / 2, p.y, 1.2); }
+                p.rayT = 0;
+            });
+            sfx('ray_break'); addShake(7); addFlash(0.18, '255,70,90');
+            mother.state = 'beam'; mother.t = 0;
+        }
+    } else if (mother.state === 'beam') {
+        mother.t += dt;
+        if (mother.t >= MOTHER_BEAM_S) { mother.state = 'move'; mother.wait = 1.4 + mother.rnd() * 1.6; mother.tx = motherPickX(); }
+    }
+}
+function drawMother() {
+    if (!mother.active) return;
+    const now = performance.now(), x = mother.x, y = mother.y + Math.sin(now / 420) * 3, w = MOTHER_W, h = MOTHER_H;
+    const cx = mother.zoneX;
+    ctx.save();
+    if (mother.state === 'aim') { // zona marcada + rayo fino que atraviesa todas las plataformas
+        const [a, b] = motherZone(), k = Math.min(1, mother.t / MOTHER_AIM_S);
+        ctx.fillStyle = 'rgba(255,60,90,' + (0.05 + 0.1 * k) + ')';
+        ctx.fillRect(a, y + h, b - a, height - (y + h));
+        ctx.setLineDash([6, 8]); ctx.lineWidth = 1.5;
+        ctx.strokeStyle = 'rgba(255,90,120,' + (0.35 + 0.35 * k) + ')';
+        ctx.beginPath(); ctx.moveTo(a, y + h); ctx.lineTo(a, height); ctx.moveTo(b, y + h); ctx.lineTo(b, height); ctx.stroke();
+        ctx.setLineDash([]);
+        ctx.globalAlpha = 0.6 + 0.4 * Math.sin(now / (70 - 40 * k));
+        ctx.strokeStyle = '#ff3b5c'; ctx.lineWidth = 1.5 + k; ctx.shadowBlur = 12; ctx.shadowColor = '#ff3b5c';
+        ctx.beginPath(); ctx.moveTo(cx, y + h - 6); ctx.lineTo(cx, height); ctx.stroke();
+        ctx.globalAlpha = 1; ctx.shadowBlur = 0;
+        ctx.font = '700 15px "Chakra Petch", sans-serif'; ctx.textAlign = 'center'; ctx.fillStyle = '#fff';
+        ctx.fillText(String(Math.ceil(MOTHER_AIM_S - mother.t)), x + w / 2, y + h + 20); // cuenta atrás
+    } else if (mother.state === 'beam') { // láser grande
+        const [a, b] = motherZone(), f = Math.max(0, 1 - mother.t / MOTHER_BEAM_S);
+        const g = ctx.createLinearGradient(a, 0, b, 0);
+        g.addColorStop(0, 'rgba(255,40,80,0)'); g.addColorStop(0.25, 'rgba(255,60,100,' + 0.75 * f + ')');
+        g.addColorStop(0.5, 'rgba(255,240,250,' + f + ')'); g.addColorStop(0.75, 'rgba(255,60,100,' + 0.75 * f + ')'); g.addColorStop(1, 'rgba(255,40,80,0)');
+        ctx.fillStyle = g; ctx.shadowBlur = 30; ctx.shadowColor = '#ff2a55';
+        ctx.fillRect(a, y + h - 8, b - a, height - (y + h - 8));
+        ctx.shadowBlur = 0;
+    }
+    // casco
+    const hull = ctx.createLinearGradient(0, y, 0, y + h);
+    hull.addColorStop(0, '#6a6fa0'); hull.addColorStop(0.55, '#2c2e52'); hull.addColorStop(1, '#14152b');
+    ctx.shadowBlur = 24; ctx.shadowColor = mother.state === 'aim' ? 'rgba(255,60,90,0.9)' : 'rgba(140,120,255,0.6)';
+    ctx.fillStyle = hull;
+    ctx.beginPath(); ctx.ellipse(x + w / 2, y + h * 0.58, w / 2, h * 0.32, 0, 0, Math.PI * 2); ctx.fill();
+    ctx.shadowBlur = 0;
+    // cúpula
+    ctx.fillStyle = 'rgba(120,230,255,0.55)';
+    ctx.beginPath(); ctx.ellipse(x + w / 2, y + h * 0.36, w * 0.2, h * 0.26, 0, Math.PI, 0); ctx.fill();
+    ctx.fillStyle = 'rgba(255,255,255,0.25)'; ctx.fillRect(x + w * 0.12, y + h * 0.5, w * 0.76, 2);
+    // luces
+    for (let i = 0; i < 7; i++) {
+        const on = Math.floor(now / 140 + i) % 3 === 0;
+        ctx.fillStyle = on ? (mother.state === 'aim' ? '#ff3b5c' : '#ffd23f') : 'rgba(255,255,255,0.25)';
+        ctx.beginPath(); ctx.arc(x + w * (0.16 + i * 0.113), y + h * 0.66, 2.6, 0, Math.PI * 2); ctx.fill();
+    }
+    // cañón
+    ctx.fillStyle = '#0b0a1c'; roundRectPath(ctx, x + w / 2 - 9, y + h * 0.8, 18, 10, 4); ctx.fill();
+    ctx.fillStyle = mother.state === 'aim' ? '#ff3b5c' : '#8a7bff';
+    ctx.beginPath(); ctx.arc(x + w / 2, y + h * 0.8 + 8, 3.5, 0, Math.PI * 2); ctx.fill();
+    ctx.restore();
+}
+
 const LAVA_EVERY = 10;      // un nivel de lava cada N niveles
 const LAVA_MAX_SKIPS = 3;   // (en desuso) antes: pasadas sin pulsar
 const LAVA_RISE_EVERY = 5;  // segundos entre cada subida de la lava
@@ -634,18 +777,6 @@ const player = {
                 }
             }
         }
-
-        // Atracción Agujeros Negros
-        blackHoles.forEach(bh => {
-            const dx = bh.x - (this.x + this.w / 2);
-            const dy = bh.y - (this.y + this.h / 2);
-            const dist = Math.sqrt(dx * dx + dy * dy);
-            if (dist > 0 && dist < bh.radius * 3) {
-                const force = (1 - dist / (bh.radius * 3)) * 0.5;
-                this.vx += (dx / dist) * force;
-                this.vy += (dy / dist) * force;
-            }
-        });
 
         this.prevY = this.y;
         this.x += this.vx;
@@ -1184,7 +1315,7 @@ class Obstacle {
             const dt = frameDtMs / 1000;
             if (this.state === 'fire') {
                 const t = this.target, cx = this.x + this.w / 2;
-                if (!t || t.isBroken || cx < t.x || cx > t.x + t.w || (t === player.currentPlatform && player.onGround)) this.endFire(); // objetivo perdido o la caja está encima
+                if (!t || t.isBroken || cx < t.x || cx > t.x + t.w) this.endFire(); // objetivo perdido (posarse encima ya NO lo detiene)
                 else {
                     this.fireT += dt;
                     t.rayT = Math.min(1, this.fireT / DRONE_RAY_SECONDS);
@@ -1289,35 +1420,6 @@ class PowerUp {
         ctx.shadowBlur = 0;
         ctx.font = '16px sans-serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillStyle = '#fff';
         ctx.fillText(this.type === 'shield' ? '🛡️' : '🚀', cx, cy + 1);
-        ctx.restore();
-    }
-}
-
-class BlackHole {
-    constructor(x, y, radius) {
-        this.x = x; this.y = y; this.radius = radius || (30 + Math.random() * 20);
-    }
-    draw() {
-        ctx.save();
-        const grad = ctx.createRadialGradient(this.x, this.y, 0, this.x, this.y, this.radius);
-        grad.addColorStop(0, '#000');
-        grad.addColorStop(0.7, '#6600ff');
-        grad.addColorStop(1, 'transparent');
-        ctx.fillStyle = grad;
-        ctx.beginPath();
-        ctx.arc(this.x, this.y, this.radius, 0, Math.PI * 2);
-        ctx.fill();
-
-        // Espiral
-        ctx.strokeStyle = 'rgba(255,255,255,0.2)';
-        ctx.lineWidth = 2;
-        ctx.beginPath();
-        for (let i = 0; i < 20; i++) {
-            const r = (i / 20) * this.radius;
-            const a = (Date.now() / 500) + (i / 2);
-            ctx.lineTo(this.x + Math.cos(a) * r, this.y + Math.sin(a) * r);
-        }
-        ctx.stroke();
         ctx.restore();
     }
 }
@@ -1428,6 +1530,7 @@ function initPlatforms(startLevel = 1) {
     placeOnPlatform();
     setupLava(false);
     populateLevel();
+    setupMother(false);
 }
 
 function spawnNextPlatform(forceGoal = false) {
@@ -1454,6 +1557,8 @@ function spawnNextPlatform(forceGoal = false) {
         else if (level >= 12 && rType < 0.32) type = (rIce > 0.5 ? 'ice' : 'sticky');
         else if (level >= 6 && rType < 0.40) type = 'spring';
         else if (level >= 8 && rType < 0.55) type = 'moving';
+        // Fase de nave nodriza: sin plataformas que desaparecen
+        if (motherLevel && (type === 'vanishing' || type === 'fragile' || type === 'flash')) type = 'normal';
     }
 
     // Plataforma tirachinas (nivel 10+): solo sustituye a una plataforma normal
@@ -1467,7 +1572,7 @@ function spawnNextPlatform(forceGoal = false) {
     if (!forceGoal && type !== 'flash' && rChest < CHEST_CHANCE) chests.push(new Chest(platform, 0.12 + rChestT * 0.76));
 
     // Obstáculos (Nivel 15+)
-    if (level >= 15 && rObs < 0.3) {
+    if (level >= 15 && rObs < 0.3 && !motherLevel) { // (sin drones en la fase de nave nodriza)
         const axis = rObsSide > 0.5 ? 'h' : 'v', dir = rObsY > 0.5 ? 1 : -1;
         const seed = Math.floor((rObsY * 0.5 + rObsSide * 0.37 + rObs) * 4294967296) >>> 0;
         if (axis === 'h') { // patrulla todo el ancho, sobrevolando la nueva plataforma
@@ -1483,8 +1588,7 @@ function spawnNextPlatform(forceGoal = false) {
         powerups.push(new PowerUp(nextX + nextW / 2 - 14, nextY - 56, rPowType > 0.5 ? 'shield' : 'rocket'));
     }
 
-    // Agujeros Negros (Nivel 25+)
-    if (level >= 25 && rBH < 0.1) blackHoles.push(new BlackHole(rBHx * width, nextY - 100, 30 + rBHr * 20));
+    // (Agujeros negros eliminados; sus tiradas rBH* se mantienen para no alterar la generación)
 
     // Props (Cajas)
     if (!forceGoal && rProp < 0.3) {
@@ -1522,6 +1626,7 @@ function nextLevel() {
     showFeedback("¡NIVEL " + hudLevel() + "!" + (windForce !== 0 ? "\n¡CUIDADO CON EL VIENTO!" : "") + (gravityFactor < 1 ? "\n¡GRAVEDAD BAJA!" : "") +
         (lavaNext ? "\n🌋 ¡LAVA! Sube cada " + LAVA_RISE_EVERY + " s: no te quedes quieto" : "") +
         (darkLevel ? "\n🌫️ ¡NIEBLA! Solo ves a tu alrededor" : "") +
+        (motherLevel ? "\n🛸 ¡NAVE NODRIZA! Huye de la zona marcada" : "") +
         (wasBombBox && boxType !== 'mystery' ? "\n💣 ¡Bomba desactivada!" : "") + boxMsg);
 
     // Guardado automático cada 5 niveles (checkpoint) — solo en la partida normal
@@ -1533,6 +1638,7 @@ function nextLevel() {
     }
 
     const current = player.currentPlatform;
+    current.rayT = 0;
     platforms = [current];
     current.idx = 0; lastPlatIdx = 0; tombstones = [];
     rescue.usedThisLevel = false; armBomb(); setupLava(true);
@@ -1545,6 +1651,7 @@ function nextLevel() {
     blackHoles = gameMode === 'custom' ? [] : blackHoles.filter(bh => Math.abs(bh.y - player.y) < height);
 
     populateLevel();
+    setupMother(true);
 }
 
 // --- UTILS ---
@@ -2091,7 +2198,8 @@ function drawBombRing() {
 }
 
 // ===================== LAVA ASCENDENTE =====================
-const isLavaLevel = () => (gameMode === 'normal' || gameMode === 'daily' || gameMode === 'race') && level % LAVA_EVERY === 0;
+const specialModes = () => gameMode === 'normal' || gameMode === 'daily' || gameMode === 'race';
+const isLavaLevel = () => specialModes() && level % LAVA_EVERY === 0;
 
 function setupLava(silent) {
     lava.active = isLavaLevel();
@@ -2764,6 +2872,7 @@ function update(dtMs = STEP_MS) {
     precisionSystem.update();
     updateBombBox(dtMs / 1000);
     updateLava(dtMs / 1000);
+    updateMother(dtMs / 1000);
 
     // Actualizar entidades
     obstacles = obstacles.filter(obs => obs.update());
@@ -2839,6 +2948,7 @@ function shiftWorld(diff) {
     blackHoles.forEach(bh => bh.y += diff);
     lava.y += diff; lava.targetY += diff;
     if (rescue.rise) rescue.rise.y0 += diff; // vuelo en curso: el punto de partida baja con el mundo
+    if (mother.active && diff > 0) mother.y += diff; // la nave se queda atrás un instante y vuelve a subir arriba
 }
 
 function draw() {
@@ -2853,13 +2963,13 @@ function draw() {
     ctx.save();
     if (screenFx.shake) ctx.translate((Math.random() - 0.5) * 2 * screenFx.shake, (Math.random() - 0.5) * 2 * screenFx.shake);
 
-    blackHoles.forEach(bh => bh.draw());
     platforms.forEach(p => p.draw());
     chests.forEach(c => c.draw());
     tombstones.forEach(t => t.draw());
     powerups.forEach(pu => pu.draw());
     props.forEach(pr => pr.draw());
     obstacles.forEach(o => o.draw());
+    drawMother();
     drawLava();
     updateTrail(); drawTrail();
     if (!bombDying) player.draw(); // tras explotar la bomba la caja ya no está

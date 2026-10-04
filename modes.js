@@ -397,7 +397,7 @@
         { id: 'none', label: '✋ Mover' },
         ...PTYPES.map((t) => ({ id: 'plat:' + t[0], label: '▬ ' + t[1], k: 'plat', t: t[0] })),
         { id: 'drone', label: '🛸 Dron', k: 'drone' }, { id: 'shield', label: '🛡 Escudo', k: 'shield' },
-        { id: 'dj', label: '🚀 Cohete', k: 'dj' }, { id: 'hole', label: '🌀 Agujero', k: 'hole' }, { id: 'box', label: '📦 Caja', k: 'box' }, { id: 'chest', label: '🎁 Cofre', k: 'chest' },
+        { id: 'dj', label: '🚀 Cohete', k: 'dj' }, { id: 'box', label: '📦 Caja', k: 'box' }, { id: 'chest', label: '🎁 Cofre', k: 'chest' },
     ];
     function buildPalette() {
         const box = $('ed-palette');
