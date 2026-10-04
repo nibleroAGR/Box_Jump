@@ -135,7 +135,7 @@ function buildCustomLevel() {
     d.items.forEach(it => {
         const cx = mapX(it.fx, 0, width, precisionSystem.side), y = baseY - it.y;
         if (it.k === 'drone') obstacles.push(new Obstacle({ patrol: true, x: cx - 20, y: y - 10, dir: it.fx < 0.5 ? 1 : -1 }));
-        else if (it.k === 'shield' || it.k === 'dj') powerups.push(new PowerUp(cx - 10, y - 10, it.k === 'shield' ? 'shield' : 'doubleJump'));
+        else if (it.k === 'shield' || it.k === 'dj') powerups.push(new PowerUp(cx - 14, y - 14, it.k === 'shield' ? 'shield' : 'rocket')); // 'dj' antiguo = cohete
         else if (it.k === 'hole') blackHoles.push(new BlackHole(cx, y, it.w || 35));
         else if (it.k === 'box') { const sz = it.w || 24; props.push(new Prop(cx - sz / 2, y - sz / 2, sz, sz, 'hsl(215, 80%, 60%)')); }
         else if (it.k === 'chest') { // se pega a la plataforma más cercana en altura
@@ -158,7 +158,7 @@ function populateLevel() {
 function updateStartScreenUI() {
     const hasCheckpoint = !!(savedGameData && savedGameData.level > 1);
     if (startBtn) {
-        startBtn.innerText = hasCheckpoint ? `1 · ▶ CONTINUAR (Nivel ${savedGameData.level})` : '1 · ▶ CONTINUAR';
+        startBtn.innerText = hasCheckpoint ? `▶ CONTINUAR (Nivel ${savedGameData.level})` : '▶ CONTINUAR';
         startBtn.classList.toggle('hidden', !hasCheckpoint);
         startBtn.disabled = !hasCheckpoint;
     }
@@ -206,7 +206,8 @@ const THEME = {
     platformMoving: '#ffae00',
     ball: '#ff00ea',
     shield: '#00ff64',
-    doubleJump: '#ff00ea',
+    shieldPlat: '#00c853',
+    rocket: '#2f8bff',
     obstacle: '#ff3300'
 };
 
@@ -230,8 +231,8 @@ function rollWind(R = Math.random) {
     return (R() < 0.5 ? -1 : 1) * (0.025 + R() * 0.055);
 }
 let hasShield = false;
-let canDoubleJump = false;
-let doubleJumpUsed = false;
+const ROCKET_JUMPS = 3;     // saltos cohete que da el power-up
+let rocketJumps = 0;        // saltos cohete que quedan (cada uno se salta una plataforma)
 let obstacles = [];
 let powerups = [];
 let blackHoles = [];
@@ -284,6 +285,15 @@ let bombRocket = false;     // la bomba desactivada vuela como un cohete
 const boxKind = () => (boxType === 'mystery' ? mysteryAs : boxType); // comportamiento real
 let bombFuse = BOMB_FUSE_SECONDS;
 let lastUpdateT = performance.now();
+// Simulación a paso fijo: la física avanza 60 pasos por segundo sea cual sea la tasa de refresco
+// de la pantalla (60, 90, 120, 144 Hz...). Así todo va a la misma velocidad en cualquier móvil.
+const STEP_MS = 1000 / 60;
+let stepAcc = 0, lastFrameT = performance.now();
+// Reloj del juego (ms): solo avanza mientras el mundo se mueve. Lo usan las plataformas que se
+// desvanecen, las frágiles, las intermitentes, la del objeto y la pausa de las móviles, para que
+// NO sigan corriendo con el juego en pausa, apuntando, en el tirachinas, en el rescate, etc.
+let gameTime = 0;
+let clockUntil = 0;          // objeto reloj: la bola va lenta hasta este instante (reloj del juego)
 const boxCfg = () => BOX_TYPES[boxKind()];
 const effWind = () => windForce * boxCfg().wind;          // viento que de verdad afecta a esta caja
 const effGrav = () => player.gravity * boxCfg().grav;     // gravedad propia de esta caja
@@ -315,6 +325,40 @@ function placeOnPlatform() {
     player.vy = 0;
 }
 
+// Plataforma "segura": no se mueve, no está a punto de romperse ni la está destruyendo un dron
+const UNSAFE_TYPES = ['moving', 'oscillating', 'flash', 'temp_full', 'vanishing', 'fragile'];
+function isSafePlatform(p) {
+    return !!p && !p.isBroken && !p.vanishingStarted && !(p.rayT > 0) && !UNSAFE_TYPES.includes(p.type) &&
+        !obstacles.some((o) => o.target === p);
+}
+// Posición X que tendrá una plataforma móvil dentro de T pasos (al llegar al borde se para 2 s)
+function predictPlatX(p, T) {
+    if (p.type !== 'moving' || p.isPaused) return p.x;
+    return Math.max(0, Math.min(width - p.w, p.x + p.vx * T));
+}
+
+// --- Vuelo guiado de la caja hasta una plataforma (rescate, escudo y bomba) ---
+// El mundo se congela, la caja vuela hasta la plataforma (que se sigue aunque la cámara se mueva)
+// y al final la física normal la posa encima (cuenta como aterrizaje).
+function flyTo(t, dur, kind, onLand) {
+    rescue.active = true; rescue.kind = kind; rescue.phase = 'rise'; rescue.btn = null; rescue.target = t;
+    rescue.rise = { t: 0, dur, x0: player.x, y0: player.y, target: t, spin: Math.PI * 2 * (player.x < t.x ? 1 : -1), onLand: onLand || null };
+    player.vx = 0; player.vy = 0; player.angularVelocity = 0; player.onGround = false;
+}
+
+// --- Escudo: al caer, se convierte en una plataforma en el centro de la pantalla y la caja vuela hasta ella ---
+const SHIELD_PLAT_W = 120;
+function shieldSave(msg) {
+    sfx('shield');
+    hasShield = false;
+    const y = Math.round(height * 0.5);
+    const sp = new Platform(width / 2 - SHIELD_PLAT_W / 2, y, SHIELD_PLAT_W, 20, false, 'shield');
+    platforms.push(sp);
+    createExplosion(width / 2, y, 1.0);
+    showFeedback(msg || '🛡️ ¡EL ESCUDO TE SALVA!');
+    flyTo(sp, 650, 'shield');
+}
+
 // --- Caja gravitatoria: un toque sobre ella (1 vez por nivel) invierte la gravedad durante 3 s ---
 function gravityFlip() {
     gravBoostUsed = true; gravFlipT = GRAV_FLIP_MS;
@@ -326,26 +370,35 @@ function gravityFlip() {
 }
 
 // --- Caja bomba: al desactivarla sale disparada como un cohete, explota y aparece otra caja ---
+const BOMB_TARGET_N = 5; // la bomba desactivada vuela hasta la 5.ª plataforma por encima
+function bombTargetPlatform() {
+    const feet = player.y + player.h;
+    const above = platforms.filter((p) => p !== player.currentPlatform && !p.isBroken && p.y < feet - 10)
+        .sort((a, b) => b.y - a.y); // la más cercana primero
+    const ok = (p) => isSafePlatform(p) && !p.isGoal;
+    // la 5.ª o, si no es segura, la primera segura a partir de ella; si no hay, la más alta segura por debajo
+    for (let i = BOMB_TARGET_N - 1; i < above.length; i++) if (ok(above[i])) return above[i];
+    for (let i = Math.min(BOMB_TARGET_N - 2, above.length - 1); i >= 0; i--) if (ok(above[i])) return above[i];
+    return above.find(isSafePlatform) || null;
+}
+function bombExplode() {
+    bombRocket = false; player.rocket = false;
+    const next = rollRandomBox(boxType);
+    setActiveBox(next);
+    showFeedback('💥 ¡LA BOMBA ESTALLA!\n📦 Nueva caja: ' + boxLabel(next));
+}
 function launchBombRocket() {
-    sfx('rocket');
-    bombRocket = true;
-    player.vy = -Math.sqrt(2 * player.gravity * 320);
-    player.vx = 0; player.angularVelocity = 0; player.rotation = 0;
-    player.straightBounce = true; player.rocket = true; player.onGround = false;
+    const cx = player.x + player.w / 2, cy = player.y + player.h / 2;
+    createExplosion(cx, cy, 2.5); createExplosion(cx, cy, 1.2);
+    sfx('explosion'); sfx('rocket');
+    if (navigator.vibrate) { try { navigator.vibrate(60); } catch (e) { /* sin vibración */ } }
+    const t = bombTargetPlatform();
+    if (!t) { bombExplode(); return; }
+    bombRocket = true; player.rocket = true;
+    showFeedback('💣💥 ¡BOMBA DESACTIVADA!\nSales disparado');
+    flyTo(t, 1100, 'bomb', bombExplode);
 }
-function updateBombRocket() {
-    if (!bombRocket) return;
-    if (player.vy > -1.5 || player.onGround) {
-        bombRocket = false; player.rocket = false;
-        const cx = player.x + player.w / 2, cy = player.y + player.h / 2;
-        createExplosion(cx, cy, 2.5); createExplosion(cx, cy, 1.2);
-        sfx('explosion');
-        if (navigator.vibrate) { try { navigator.vibrate(60); } catch (e) { /* sin vibración */ } }
-        const next = rollRandomBox(boxType);
-        setActiveBox(next);
-        showFeedback('💥 ¡LA BOMBA ESTALLA!\n📦 Nueva caja: ' + boxLabel(next));
-    }
-}
+function updateBombRocket() { /* el vuelo lo gestiona flyTo / updateRescue */ }
 
 // --- Caja de goma: un toque sobre ella (1 vez por nivel) la hace botar como una plataforma-resorte ---
 function rubberBoost() {
@@ -353,7 +406,6 @@ function rubberBoost() {
     player.vy = -Math.sqrt(2 * effGrav() * 220) * 1.4;
     player.vx = 0; player.straightBounce = true; player.rocket = true;
     player.onGround = false; player.angularVelocity = 0; player.squash = 1;
-    doubleJumpUsed = false;
     showFeedback('🟣 ¡BOTE!');
     sfx('spring');
     createExplosion(player.x + player.w / 2, player.y + player.h, 0.8);
@@ -552,6 +604,7 @@ const player = {
             if (this.currentPlatform && this.currentPlatform.type === 'ice') friction = 0.98;
             if (this.currentPlatform && (this.currentPlatform.type === 'sticky' || this.currentPlatform.type === 'mini_sticky')) friction = 0;
             if (boxKind() === 'sticky') friction = 0; // la caja pegajosa se queda clavada donde cae
+            if (this.currentPlatform && this.currentPlatform.type === 'shield') friction = 0; // el escudo la sujeta
 
             this.vx *= friction;
             this.rotation = 0;
@@ -580,6 +633,7 @@ const player = {
             }
         });
 
+        this.prevY = this.y;
         this.x += this.vx;
         this.y += this.vy;
 
@@ -587,11 +641,8 @@ const player = {
         if (this.x + this.w > width) { this.x = width - this.w; if (boxKind() === 'rubber' && !this.onGround) this.vx = -Math.abs(this.vx) * 0.85; }
 
         if (this.y > height) {
-            if (hasShield) {
-                useShield();
-            } else {
-                endGame();
-            }
+            if (hasShield) shieldSave();
+            else endGame();
         }
     },
 
@@ -831,8 +882,8 @@ class Platform {
         this.alpha = 1.0;
         this.vanishingStarted = false;
         this.startTime = 0;
-        this.vx = (type === 'moving') ? ((dirX === undefined ? Math.random() > 0.5 : dirX) ? 2 : -2) * (1 + level * 0.1) : 0;
-        this.vy = (type === 'oscillating') ? ((dirY === undefined ? Math.random() > 0.5 : dirY) ? 1.5 : -1.5) * (1 + level * 0.1) : 0;
+        this.vx = (type === 'moving') ? ((dirX === undefined ? Math.random() > 0.5 : dirX) ? 2 : -2) * Math.min(3, 1 + level * 0.1) : 0; // tope: x3
+        this.vy = (type === 'oscillating') ? ((dirY === undefined ? Math.random() > 0.5 : dirY) ? 1.5 : -1.5) * Math.min(3, 1 + level * 0.1) : 0;
         this.isBroken = false;
         this.isPaused = false;
         this.pauseTimer = 0;
@@ -896,6 +947,10 @@ class Platform {
             if (this.rayT > 0.5) { ctx.moveTo(this.x + this.w * 0.7, this.y); ctx.lineTo(this.x + this.w * 0.62, this.y + this.h * 0.5); ctx.lineTo(this.x + this.w * 0.7, this.y + this.h); }
             ctx.stroke();
         }
+        if (this.type === 'shield') { // escudo convertido en plataforma
+            ctx.shadowBlur = 0; ctx.font = '14px sans-serif'; ctx.textAlign = 'center'; ctx.fillStyle = '#fff';
+            ctx.fillText('🛡️', this.x + this.w / 2, this.y + 15);
+        }
         if (this.type === 'oscillating') {
             ctx.fillStyle = 'rgba(255,255,255,0.4)';
             ctx.fillRect(this.x, this.y + this.h / 2 - 1, this.w, 2);
@@ -920,6 +975,7 @@ class Platform {
             case 'mini_sticky': return THEME.platformMini;
             case 'fragile': return THEME.platformFragile;
             case 'sling': return '#ff9f1c';
+            case 'shield': return THEME.shieldPlat;
             default: return THEME.platformBright;
         }
     }
@@ -938,14 +994,14 @@ class Platform {
         // Movimiento Horizontal (Moving)
         if (this.type === 'moving') {
             if (this.isPaused) {
-                if (Date.now() > this.pauseTimer) this.isPaused = false;
+                if (gameTime > this.pauseTimer) this.isPaused = false;
             } else {
                 this.x += this.vx;
                 if (this.x < 0 || this.x + this.w > width) {
                     this.vx *= -1;
                     this.x = this.x < 0 ? 0 : width - this.w;
                     this.isPaused = true;
-                    this.pauseTimer = Date.now() + 2000;
+                    this.pauseTimer = gameTime + 2000;
                 }
             }
         }
@@ -961,16 +1017,16 @@ class Platform {
 
         // Visibilidad (Flash)
         if (this.type === 'flash') {
-            if (!this.flashTime) this.flashTime = Date.now();
-            if (Date.now() - this.flashTime > 2000) {
+            if (this.flashTime === undefined) this.flashTime = gameTime;
+            if (gameTime - this.flashTime > 2000) {
                 this.isVisible = !this.isVisible;
-                this.flashTime = Date.now();
+                this.flashTime = gameTime;
             }
         }
 
         // Desvanecimiento / Rotura...
         if ((this.type === 'vanishing' || this.type === 'fragile' || this.type === 'temp_full') && this.vanishingStarted) {
-            const elapsed = Date.now() - this.startTime;
+            const elapsed = gameTime - this.startTime;
             const duration = this.type === 'vanishing' ? 5000 : (this.type === 'temp_full' ? 8000 : 1500);
             this.alpha = Math.max(0, 1 - (elapsed / duration));
             if (elapsed >= duration) {
@@ -998,7 +1054,7 @@ class Obstacle {
         this.dead = false;
         if (o && o.hover) { // dron "plataforma": horizontal o vertical, puede disparar rayo
             this.hover = true; this.axis = o.axis; this.x = o.x; this.y = o.y; this.off = 0;
-            const spd = 1.5 + level * 0.05;
+            const spd = Math.min(3.5, 1.5 + level * 0.05);
             this.vx = o.axis === 'h' ? o.dir * spd : 0;
             this.vy = o.axis === 'v' ? o.dir * spd * 0.7 : 0;
             this.rnd = mulberry32(o.seed >>> 0);          // decisiones deterministas (misma fase diaria para todos)
@@ -1006,21 +1062,22 @@ class Obstacle {
             return;
         }
         if (o && o.patrol) { // dron de patrulla (fases del editor): va y viene sin salir nunca
-            this.patrol = true; this.x = o.x; this.y = o.y; this.vx = o.dir * (2.2 + level * 0.15);
+            this.patrol = true; this.x = o.x; this.y = o.y; this.vx = o.dir * Math.min(5, 2.2 + level * 0.15);
             return;
         }
         const rSide = (o && o.rSide !== undefined) ? o.rSide : Math.random();
         const rY = (o && o.rY !== undefined) ? o.rY : Math.random();
         this.x = rSide > 0.5 ? -this.w : width;
         this.y = player.y - 300 - rY * 400;
-        this.vx = (this.x < 0 ? 1 : -1) * (2 + level * 0.2);
+        this.vx = (this.x < 0 ? 1 : -1) * Math.min(6, 2 + level * 0.2);
     }
     // Plataforma que tiene justo debajo (la más cercana), sin contar la meta
     platformBelow() {
         const cx = this.x + this.w / 2;
         let best = null;
         platforms.forEach((p) => {
-            if (p.isBroken || p.isGoal || p.type === 'temp_full' || (p.type === 'flash' && !p.isVisible)) return;
+            if (p.isBroken || p.isGoal || p.type === 'temp_full' || p.type === 'shield' || (p.type === 'flash' && !p.isVisible)) return;
+            if (p === player.currentPlatform && player.onGround) return; // nunca la plataforma donde está la caja
             if (p.y > this.y + this.h && cx >= p.x && cx <= p.x + p.w && (!best || p.y < best.y)) best = p;
         });
         return best;
@@ -1039,7 +1096,7 @@ class Obstacle {
             const dt = frameDtMs / 1000;
             if (this.state === 'fire') {
                 const t = this.target, cx = this.x + this.w / 2;
-                if (!t || t.isBroken || cx < t.x || cx > t.x + t.w) this.endFire(); // objetivo perdido
+                if (!t || t.isBroken || cx < t.x || cx > t.x + t.w || (t === player.currentPlatform && player.onGround)) this.endFire(); // objetivo perdido o la caja está encima
                 else {
                     this.fireT += dt;
                     t.rayT = Math.min(1, this.fireT / DRONE_RAY_SECONDS);
@@ -1112,30 +1169,34 @@ class Obstacle {
 
 class PowerUp {
     constructor(x, y, type) {
-        this.x = x; this.y = y; this.type = type; // 'shield', 'doubleJump'
-        this.size = 20;
+        this.x = x; this.y = y; this.type = type; // 'shield' | 'rocket'
+        this.size = 28;
         this.bob = 0;
     }
     update() {
-        this.bob = Math.sin(Date.now() / 300) * 5;
+        this.bob = Math.sin(performance.now() / 300) * 5;
         const dx = (this.x + this.size / 2) - (player.x + player.w / 2);
         const dy = (this.y + this.size / 2 + this.bob) - (player.y + player.h / 2);
         const dist = Math.sqrt(dx * dx + dy * dy);
-        if (dist < 30) {
-            if (this.type === 'shield') { hasShield = true; showFeedback("¡ESCUDO ACTIVADO!"); }
-            if (this.type === 'doubleJump') { canDoubleJump = true; showFeedback("¡SALTO DOBLE DISPONIBLE!"); }
+        if (dist < 32) {
+            sfx('item');
+            if (this.type === 'shield') { hasShield = true; showFeedback('🛡️ ¡ESCUDO ACTIVADO!'); }
+            if (this.type === 'rocket') { rocketJumps = ROCKET_JUMPS; showFeedback('🚀 ¡COHETE! Tus próximos ' + ROCKET_JUMPS + ' saltos se saltan una plataforma'); }
             return false;
         }
         return true;
     }
     draw() {
+        const cx = this.x + this.size / 2, cy = this.y + this.size / 2 + this.bob, r = this.size / 2;
+        const col = this.type === 'shield' ? THEME.shield : THEME.rocket;
         ctx.save();
-        const col = this.type === 'shield' ? THEME.shield : THEME.doubleJump;
-        ctx.shadowBlur = 20; ctx.shadowColor = col;
-        ctx.fillStyle = col;
-        ctx.beginPath();
-        ctx.arc(this.x + this.size / 2, this.y + this.size / 2 + this.bob, this.size / 2, 0, Math.PI * 2);
-        ctx.fill();
+        ctx.shadowBlur = 18; ctx.shadowColor = col;
+        ctx.fillStyle = this.type === 'shield' ? 'rgba(0,255,100,0.18)' : 'rgba(47,139,255,0.2)';
+        ctx.beginPath(); ctx.arc(cx, cy, r, 0, Math.PI * 2); ctx.fill();
+        ctx.lineWidth = 3; ctx.strokeStyle = col; ctx.stroke();
+        ctx.shadowBlur = 0;
+        ctx.font = '16px sans-serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillStyle = '#fff';
+        ctx.fillText(this.type === 'shield' ? '🛡️' : '🚀', cx, cy + 1);
         ctx.restore();
     }
 }
@@ -1233,17 +1294,6 @@ function cancelReels() {
     reelTimer = null; reels = [];
 }
 
-function useShield() {
-    sfx('shield');
-    hasShield = false;
-    player.vy = -15;
-    player.vx = 0;
-    player.y = player.currentPlatform ? player.currentPlatform.y - 200 : height / 2;
-    player.x = player.currentPlatform ? player.currentPlatform.x + player.currentPlatform.w / 2 : width / 2;
-    showFeedback("¡ESCUDO USADO!");
-    createExplosion(player.x, player.y, 1.0);
-}
-
 function initPlatforms(startLevel = 1) {
     platforms = [];
     props = [];
@@ -1260,10 +1310,11 @@ function initPlatforms(startLevel = 1) {
     platformsInLevel = levelPlatformCount();
     platformsReached = 0; totalPlatformGlobalCount = 0;
     combo = 0; rollEnvironment(false);
-    hasShield = false; canDoubleJump = false; doubleJumpUsed = false;
+    hasShield = false; rocketJumps = 0;
     cancelReels(); inventory = []; chests = []; tombstones = []; usedTombPhrases.clear(); lastPlatIdx = 0; resetRescue(); armBomb(); updateInventoryUI();
     ballSpeedFactor = 1.0; greenPowerActive = 0; platformItemActive = false; bombActive = false;
     if (clockTimeoutId) { clearTimeout(clockTimeoutId); clockTimeoutId = null; }
+    clockUntil = 0;
 
     setLevelHUD();
     updateHeightDisplay();
@@ -1336,8 +1387,8 @@ function spawnNextPlatform(forceGoal = false) {
     }
 
     // Power-ups (Nivel 18+)
-    if (level >= 18 && rPow < 0.15 && !hasShield && !canDoubleJump) {
-        powerups.push(new PowerUp(nextX + nextW / 2 - 10, nextY - 50, rPowType > 0.5 ? 'shield' : 'doubleJump'));
+    if (level >= 18 && rPow < 0.15 && !hasShield && rocketJumps === 0) {
+        powerups.push(new PowerUp(nextX + nextW / 2 - 14, nextY - 56, rPowType > 0.5 ? 'shield' : 'rocket'));
     }
 
     // Agujeros Negros (Nivel 25+)
@@ -1405,9 +1456,27 @@ function nextLevel() {
 
 // --- UTILS ---
 function resize() {
+    const oldW = width, oldH = height;
     width = canvas.width = canvas.offsetWidth;
     height = canvas.height = canvas.offsetHeight;
     precisionSystem.init();
+    if (oldW && oldH && platforms.length && (oldW !== width || oldH !== height)) rescaleWorld(width / oldW, height - oldH);
+}
+// Girar el móvil / cambiar la ventana: escala en horizontal y mantiene todo pegado a la parte de abajo
+function rescaleWorld(kx, dy) {
+    const fit = (o, w) => { o.x = Math.max(0, Math.min(width - (w || 0), o.x * kx)); o.y += dy; };
+    platforms.forEach((p) => fit(p, p.type === 'temp_full' ? 0 : p.w));
+    props.forEach((o) => fit(o, o.w));
+    obstacles.forEach((o) => fit(o, o.w));
+    powerups.forEach((o) => fit(o, o.size));
+    blackHoles.forEach((o) => { o.x *= kx; o.y += dy; });
+    particles.forEach((o) => { o.x *= kx; o.y += dy; });
+    fit(player, player.w);
+    if (player.prevY !== undefined) player.prevY += dy;
+    lava.y += dy; lava.targetY += dy;
+    if (originY !== null) originY += dy;
+    if (rescue.rise) { rescue.rise.x0 *= kx; rescue.rise.y0 += dy; }
+    if (rescue.btn) { rescue.btn.x *= kx; rescue.btn.y += dy; }
 }
 
 function showFeedback(text) {
@@ -1437,12 +1506,18 @@ function createExplosion(x, y, multiplier) {
 function computeJump(precision) {
     const { multiplier, tier } = precision;
     if (!player.onGround || multiplier <= 0) return null;
-    const candidates = platforms.filter(p => p.y < player.y).sort((a, b) => b.y - a.y);
+    const candidates = platforms.filter(p => p.y < player.y && !p.isBroken && !(p.type === 'flash' && !p.isVisible))
+        .sort((a, b) => b.y - a.y);
     if (candidates.length === 0) return null;
-    const target = candidates[0];
+    let target = candidates[0], rocket = false;
+    // Cohete: se salta la plataforma más cercana y va a la siguiente que sea segura
+    if (rocketJumps > 0) {
+        const far = candidates.slice(1).find(isSafePlatform);
+        if (far) { target = far; rocket = true; }
+    }
     const distY = player.y - target.y + player.h;
 
-    const targetMultiplier = (tier === "PERFECT") ? 1.08 : (tier === "GOOD" ? 1.45 : (Math.random() > 0.5 ? 2.0 : 0.4));
+    const targetMultiplier = rocket ? 1.08 : ((tier === "PERFECT") ? 1.08 : (tier === "GOOD" ? 1.45 : (Math.random() > 0.5 ? 2.0 : 0.4)));
     const g = effGrav(); // gravedad propia de la caja (la ligera cae más despacio)
     const vy = -Math.sqrt(2 * g * distY) * targetMultiplier;
 
@@ -1452,17 +1527,24 @@ function computeJump(precision) {
     const tFall = Math.sqrt(Math.max(0, 2 * hFall / g));
     const totalT = tRise + tFall;
 
-    const dx = (target.x + target.w / 2) - (player.x + player.w / 2);
-    return { vy, vxBase: dx / totalT, totalT, target, tier };
+    // Si es móvil, se apunta a donde estará al llegar
+    const dx = (predictPlatX(target, totalT) + target.w / 2) - (player.x + player.w / 2);
+    return { vy, vxBase: dx / totalT, totalT, target, tier, rocket };
 }
 
 function launchPlayer(j, vx) {
     sfx('jump', { tier: j.tier });
+    if (j.rocket) {
+        rocketJumps = Math.max(0, rocketJumps - 1);
+        sfx('rocket');
+        showFeedback('🚀 ¡SALTO COHETE!' + (rocketJumps ? ' (quedan ' + rocketJumps + ')' : ''));
+    }
     player.vy = j.vy;
     player.vx = vx;
     player.onGround = false;
     player.bouncesLeft = 2;
     player.angularVelocity = (j.tier === "PERFECT" ? 0.15 : (j.tier === "GOOD" ? 0.35 : 0.6));
+    if (j.rocket) { player.rocket = true; player.straightBounce = true; player.angularVelocity = 0.1; } // sin viento, con estela
 }
 
 function handleJump(precision) {
@@ -1491,7 +1573,8 @@ function simulateJump(j, vx0) {
         if (vy >= 0) {
             for (const p of platforms) {
                 if (p.type === 'flash' && !p.isVisible) continue;
-                if (x + player.w > p.x && x < p.x + p.w && bottom >= p.y && bottom <= p.y + p.h + 10) {
+                const px = predictPlatX(p, step), pw = p.type === 'temp_full' ? width : p.w;
+                if (x + player.w > px && x < px + pw && bottom >= p.y && (bottom <= p.y + p.h + 10 || prevBottom <= p.y + 10)) {
                     landing = { x: x + player.w / 2, y: p.y, onTarget: p === j.target };
                     pts.push({ x: landing.x, y: p.y - player.h / 2 });
                     break;
@@ -1720,8 +1803,12 @@ function checkCollisions() {
     // Colisión Jugador con Plataformas
     platforms.forEach(p => {
         if (p.type === 'flash' && !p.isVisible) return; // "apagada": el jugador la atraviesa
-        if (player.vy >= 0 && player.x + player.w > p.x && player.x < p.x + p.w &&
-            player.y + player.h >= p.y && player.y + player.h <= p.y + p.h + 10) {
+        const bottom = player.y + player.h;
+        const prevBottom = (player.prevY === undefined ? player.y : player.prevY) + player.h;
+        const pw = p.type === 'temp_full' ? width : p.w;
+        // Colisión continua: también cuenta si en este paso ha cruzado la parte de arriba de la plataforma
+        if (player.vy >= 0 && player.x + player.w > p.x && player.x < p.x + pw &&
+            bottom >= p.y && (bottom <= p.y + p.h + 10 || prevBottom <= p.y + 10)) {
 
             // Item Bomba se ha movido a triggerAction para elección manual
             const impact = player.vy;
@@ -1740,13 +1827,12 @@ function checkCollisions() {
             player.onGround = !bounced;
             if (player.currentPlatform !== p) {
                 // Al aterrizar en plataforma móvil, anular velocidad lateral (Punto 2)
-                if (p.type === 'moving') player.vx = 0;
+                if (p.type === 'moving' || p.type === 'shield') player.vx = 0;
 
                 player.currentPlatform = p;
                 sfx('land', { impact });
                 lastPlatIdx = p.idx;
                 platformsReached++;
-                doubleJumpUsed = false; // Reset salto doble al tocar suelo
                 chests.forEach(c => { if (c.p === p && !c.opened) openChest(c); });
                 // Caja pegajosa: se queda clavada pase lo que pase (inercia, fuerza de salto, tipo de plataforma)
                 let stuck = false;
@@ -1757,7 +1843,7 @@ function checkCollisions() {
                 }
                 if ((p.type === 'vanishing' || p.type === 'fragile') && !p.vanishingStarted) {
                     p.vanishingStarted = true;
-                    p.startTime = Date.now();
+                    p.startTime = gameTime;
                 }
                 if (p.type === 'spring' && !stuck) {
                     // Resorte: rebote automático hacia arriba, no requiere precisión del jugador
@@ -1768,8 +1854,7 @@ function checkCollisions() {
                     player.rocket = true;         // estela de fuego mientras sube
                     player.onGround = false;
                     player.angularVelocity = 0;   // sube recto, como un cohete
-                    doubleJumpUsed = false;
-                    showFeedback("¡RESORTE! 🚀");
+                                    showFeedback("¡RESORTE! 🚀");
                     sfx('spring');
                     createExplosion(p.x + p.w / 2, p.y, 0.8);
                 }
@@ -1805,7 +1890,7 @@ function stompDrone(obs) {
     }
     player.y = obs.y - player.h;
     player.straightBounce = true; player.rocket = true; player.onGround = false;
-    player.angularVelocity = 0.1; doubleJumpUsed = false;
+    player.angularVelocity = 0.1;
     if (navigator.vibrate) { try { navigator.vibrate(25); } catch (e) { } }
     showFeedback('💥 ¡DRON DESTRUIDO!');
     sfx('drone_destroy');
@@ -1858,21 +1943,28 @@ function landingBurst(p, color, n) {
 }
 
 // ===================== BOMBA: 20 s POR NIVEL =====================
+const MYSTERY_BOMB_WARN = 5; // la misteriosa-bomba se descubre en los últimos 5 s
 function updateBombBox(dtSec) {
     if (boxKind() !== 'bomb' || runEnded) return;
+    const prevFuse = bombFuse;
     bombFuse -= dtSec;
+    if (boxType === 'mystery' && prevFuse >= MYSTERY_BOMB_WARN && bombFuse < MYSTERY_BOMB_WARN) {
+        showFeedback('❓💣 ¡LA CAJA MISTERIOSA ERA UNA BOMBA!\nLlega a la meta');
+        sfx('rescue_alert');
+    }
     if (bombFuse > 0) return;
     createExplosion(player.x + player.w / 2, player.y + player.h / 2, 2);
     if (hasShield) {
-        useShield(); armBomb(); bombFuse = BOMB_FUSE_SECONDS / 2;
-        showFeedback('💥 ¡LA BOMBA ESTALLA!\nEl escudo te salva (10 s más)');
+        sfx('shield'); hasShield = false; armBomb(); bombFuse = BOMB_FUSE_SECONDS / 2;
+        showFeedback('💥 ¡LA BOMBA ESTALLA!\nEl escudo te salva (' + Math.round(BOMB_FUSE_SECONDS / 2) + ' s más)');
     } else {
         showFeedback('💥 ¡BOOM!');
         endGame();
     }
 }
 function drawBombRing() {
-    if (boxKind() !== 'bomb' || boxType === 'mystery' || runEnded) return;
+    if (boxKind() !== 'bomb' || runEnded) return;
+    if (boxType === 'mystery' && bombFuse >= MYSTERY_BOMB_WARN) return; // secreta hasta el final
     const cx = player.x + player.w / 2, cy = player.y + player.h / 2;
     const k = Math.max(0, bombFuse / BOMB_FUSE_SECONDS);
     ctx.save();
@@ -1919,9 +2011,8 @@ function updateLava(dtSec = 0) {
     if (player.y + player.h > lava.y + 6) {
         createExplosion(player.x + player.w / 2, player.y + player.h, 1.5);
         if (hasShield) {
-            useShield();
             lava.timer = LAVA_RISE_EVERY; lava.y = lava.targetY = height + 30;
-            showFeedback('🛡️ ¡EL ESCUDO TE SALVA DE LA LAVA!');
+            shieldSave('🛡️ ¡EL ESCUDO TE SALVA DE LA LAVA!');
         } else {
             showFeedback('🌋 ¡LA LAVA TE HA PILLADO!');
             endGame();
@@ -1979,7 +2070,7 @@ function drawStatusHUD() {
         ctx.fillText('🌀 GRAVEDAD INVERTIDA ' + (gravFlipT / 1000).toFixed(1) + ' s', width / 2, y);
         y += 20;
     }
-    if (boxKind() === 'bomb' && boxType !== 'mystery' && !runEnded) {
+    if (boxKind() === 'bomb' && !runEnded && (boxType !== 'mystery' || bombFuse < MYSTERY_BOMB_WARN)) {
         const urgent = bombFuse < 5;
         const pulse = urgent ? 0.6 + 0.4 * Math.sin(performance.now() / 80) : 1;
         ctx.fillStyle = urgent ? `rgba(255,59,47,${pulse})` : 'rgba(255,174,0,0.95)';
@@ -2125,7 +2216,6 @@ function slingRelease() {
     player.vx = v.vx; player.vy = v.vy;
     player.onGround = false; player.currentPlatform = null;
     player.straightBounce = false; player.bouncesLeft = 2; player.angularVelocity = 0.12; player.rocket = true;
-    doubleJumpUsed = false;
     createExplosion(player.x + player.w / 2, player.y + player.h, 0.9);
     sfx('sling_launch');
     if (navigator.vibrate) { try { navigator.vibrate(20); } catch (e) { } }
@@ -2164,14 +2254,13 @@ function drawSling() {
 // ===================== RESCATE EN EL ÚLTIMO SEGUNDO (QTE) =====================
 function resetRescue() {
     rescue.active = false; rescue.usedThisLevel = false; rescue.rolled = false; rescue.phase = 'idle';
-    rescue.step = 0; rescue.elapsed = 0; rescue.btn = null; rescue.prev = null; rescue.target = null; rescue.rise = null;
+    rescue.step = 0; rescue.elapsed = 0; rescue.btn = null; rescue.prev = null; rescue.target = null; rescue.rise = null; rescue.kind = null;
 }
 const rescueRadius = () => RESCUE_START_R * Math.max(0, 1 - rescue.elapsed / RESCUE_TIME);
 
 // Plataforma a la que subirá la caja: la más ALTA de las que se ven en pantalla, sin plataformas con movimiento.
 function rescueTarget() {
-    const c = platforms.filter((p) => !p.isBroken && p.type !== 'moving' && p.type !== 'oscillating' &&
-        p.type !== 'flash' && p.type !== 'temp_full' && p.y >= 0 && p.y < player.y);
+    const c = platforms.filter((p) => isSafePlatform(p) && p.y >= 0 && p.y < player.y);
     c.sort((a, b) => a.y - b.y); // menor y = más arriba
     return c[0] || null;
 }
@@ -2190,7 +2279,7 @@ function maybeStartRescue() {
     // Una sola tirada por caída: 1 posibilidad entre 3 de que aparezca el tap
     if (!rescue.rolled) { rescue.rolled = true; if (Math.random() >= RESCUE_CHANCE) return false; }
     else return false;                                                   // ya se tiró en esta caída y no salió
-    rescue.active = true; rescue.usedThisLevel = true;
+    rescue.active = true; rescue.usedThisLevel = true; rescue.kind = 'rescue';
     rescue.phase = 'qte'; rescue.step = 0; rescue.prev = null;
     rescue.target = rescueTarget();
     newRescueButton();
@@ -2231,22 +2320,19 @@ function rescueFail(msg) {
     createExplosion(player.x + player.w / 2, player.y + player.h / 2, 0.2);
 }
 function rescueSuccess() {
-    const t = (rescue.target && !rescue.target.isBroken) ? rescue.target : rescueTarget();
+    const t = (rescue.target && isSafePlatform(rescue.target)) ? rescue.target : rescueTarget();
     if (!t) { rescueFail('¡SIN PLATAFORMA!'); return; }
-    rescue.phase = 'rise'; rescue.btn = null;
-    rescue.rise = {
-        t: 0, dur: 750, x0: player.x, y0: player.y,
-        x1: Math.max(0, Math.min(width - player.w, t.x + t.w / 2 - player.w / 2)), y1: t.y - player.h,
-        spin: Math.PI * 2 * (player.x < t.x ? 1 : -1)
-    };
-    player.vx = 0; player.vy = 0; player.angularVelocity = 0;
+    flyTo(t, 750, 'rescue');
     showFeedback('🎆 ¡RESCATE PERFECTO!');
 }
+const flyX1 = (r) => Math.max(0, Math.min(width - player.w, r.target.x + r.target.w / 2 - player.w / 2));
+const flyY1 = (r) => r.target.y - player.h;
 function rescueLand() {
     const r = rescue.rise;
-    player.x = r.x1; player.y = r.y1; player.vx = 0; player.vy = 0;
+    player.x = flyX1(r); player.y = flyY1(r); player.prevY = player.y; player.vx = 0; player.vy = 0;
     player.rotation = 0; player.angularVelocity = 0; player.onGround = false; player.bouncesLeft = 2;
-    rescue.active = false; rescue.phase = 'idle'; rescue.rise = null;
+    rescue.active = false; rescue.phase = 'idle'; rescue.rise = null; rescue.kind = null;
+    if (r.onLand) { try { r.onLand(); } catch (e) { console.error(e); } }
     // la física normal la posa en la plataforma (cuenta como aterrizaje: cofres, meta, etc.)
 }
 function updateRescue(dtMs) {
@@ -2261,8 +2347,8 @@ function updateRescue(dtMs) {
         const r = rescue.rise;
         r.t += dtMs / r.dur;
         const k = Math.min(1, r.t), e = 1 - Math.pow(1 - k, 3);
-        player.x = r.x0 + (r.x1 - r.x0) * e;
-        player.y = r.y0 + (r.y1 - r.y0) * e;
+        player.x = r.x0 + (flyX1(r) - r.x0) * e; // destino vivo: sigue a la plataforma aunque la cámara se mueva
+        player.y = r.y0 + (flyY1(r) - r.y0) * e;
         player.rotation = (1 - e) * r.spin;
         emitRocketFlame();
         if (k >= 1) rescueLand();
@@ -2282,7 +2368,7 @@ function spawnFirework(x, y, big) {
     }
 }
 function drawRescue() {
-    if (!rescue.active) return;
+    if (!rescue.active || rescue.kind !== 'rescue') return;
     ctx.save();
     // viñeta azulada: sensación de cámara lenta
     const vg = ctx.createRadialGradient(width / 2, height / 2, height * 0.2, width / 2, height / 2, height * 0.85);
@@ -2328,16 +2414,20 @@ const ORIGIN_BOTTOM_MARGIN = 34;   // hueco mínimo bajo la plataforma de origen
 const PLAYER_MIN_Y = 0.12;         // el jugador nunca sube por encima de este % de la pantalla
 let originY = null;
 
-function update() {
-    const nowT = performance.now();
-    const dtMs = Math.min(50, nowT - lastUpdateT); lastUpdateT = nowT; // el tiempo en pausa/apuntando no cuenta
+function update(dtMs = STEP_MS) {
     frameDtMs = dtMs;
     if (!gameActive) return;
     if (window.SFX) window.SFX.mood(lava.active ? 'lava' : (darkLevel ? 'dark' : 'normal'));
     if (aim.active) { aim.update(); updateParticles(); return; } // mundo congelado mientras se apunta
     if (sling.active) { updateParticles(); return; }               // tirachinas: mundo congelado
-    if (rescue.active) { updateRescue(dtMs); updateParticles(); return; } // rescate: mundo congelado
+    if (rescue.active) { // rescate / vuelo del escudo / vuelo de la bomba: mundo congelado
+        updateRescue(dtMs);
+        if (rescue.phase === 'rise') updateCamera(); // la cámara acompaña a la caja en el vuelo
+        updateParticles(); return;
+    }
     if (maybeStartRescue()) { updateParticles(); return; }
+    gameTime += dtMs; // el reloj del juego solo corre con el mundo en marcha
+    if (clockUntil && gameTime >= clockUntil) { ballSpeedFactor = 1.0; clockUntil = 0; }
     if (gravFlipT > 0) { // gravedad invertida: cuenta atrás
         gravFlipT -= dtMs;
         if (gravFlipT <= 0) { gravFlipT = 0; showFeedback('⬇️ Gravedad normal'); sfx('gravity_off'); }
@@ -2374,6 +2464,12 @@ function update() {
         }
     }
 
+    updateCamera();
+    trackHeight();
+    updateParticles();
+}
+
+function updateCamera() {
     // Plataforma de origen del salto (se mantiene aunque desaparezca)
     if (player.currentPlatform) originY = player.currentPlatform.y;
 
@@ -2399,10 +2495,9 @@ function update() {
         powerups.forEach(pu => pu.y += diff);
         blackHoles.forEach(bh => bh.y += diff);
         lava.y += diff; lava.targetY += diff;
+        if (rescue.rise) rescue.rise.y0 += diff; // vuelo en curso: el punto de partida baja con el mundo
     }
 
-    trackHeight();
-    updateParticles();
 }
 
 function draw() {
@@ -2445,10 +2540,11 @@ function draw() {
         ctx.arc(player.x + player.w / 2, player.y + player.h / 2, 35, 0, Math.PI * 2);
         ctx.stroke();
     }
-    if (canDoubleJump) {
-        ctx.fillStyle = THEME.doubleJump;
-        ctx.font = "bold 12px Arial";
-        ctx.fillText("2J READY", player.x, player.y - 10);
+    if (rocketJumps > 0) {
+        ctx.save();
+        ctx.fillStyle = THEME.rocket; ctx.font = 'bold 12px Arial'; ctx.textAlign = 'center';
+        ctx.fillText('🚀 x' + rocketJumps, player.x + player.w / 2, player.y - 12);
+        ctx.restore();
     }
 
     particles.forEach(p => {
@@ -2483,7 +2579,15 @@ function drawDarkness() {
     ctx.restore();
 }
 
-function gameLoop() { update(); draw(); requestAnimationFrame(gameLoop); }
+function gameLoop() {
+    const now = performance.now();
+    stepAcc += Math.min(100, now - lastFrameT); // tras una pausa larga no se intenta "recuperar" el tiempo
+    lastFrameT = now;
+    let n = 0;
+    while (stepAcc >= STEP_MS && n < 6) { update(STEP_MS); stepAcc -= STEP_MS; n++; }
+    draw();
+    requestAnimationFrame(gameLoop);
+}
 function startGame(continueGame = false, cfg = null) {
     // Hay que iniciar sesión con Google antes de poder jugar
     if (window.BJFirebase && !window.BJFirebase.isSignedIn()) {
@@ -2605,36 +2709,44 @@ if (newGameBtn) newGameBtn.addEventListener('click', () => askStart(() => startG
 restartBtn.addEventListener('click', () => (modeCfg ? startGame(false, modeCfg) : startGame(true)));
 if (goMenuBtn) goMenuBtn.addEventListener('click', goToMenu);
 
+// Punto tocado en coordenadas del canvas (ratón o dedo); clientX = 0 también es válido
+function canvasPoint(e) {
+    const rect = canvas.getBoundingClientRect();
+    const pt = (e.touches && e.touches.length) ? e.touches[0] : e;
+    return { x: (pt.clientX || 0) - rect.left, y: (pt.clientY || 0) - rect.top };
+}
+const BOMB_TAP_PAD = 26; // margen táctil alrededor de la plataforma (solo mide 20 px de alto)
+// Plataformas que el objeto bomba puede romper: ni la meta, ni la tuya, ni el escudo, y visibles
+const bombablePlatform = (p) => !p.isBroken && !p.isGoal && p !== player.currentPlatform && p.type !== 'shield' &&
+    p.type !== 'temp_full' && p.y > -10 && p.y < height;
+
 const triggerAction = (e) => {
     // Si item bomba está activo (especial: el juego está pausado)
     if (bombActive) {
-        // Encontrar si se ha clicado una plataforma
-        const rect = canvas.getBoundingClientRect();
-        const rawX = (e.clientX || (e.touches ? e.touches[0].clientX : 0)) - rect.left;
-        const rawY = (e.clientY || (e.touches ? e.touches[0].clientY : 0)) - rect.top;
-        const mouseX = rawX, mouseY = rawY;
-
-        const clickedPlatform = platforms.find(p =>
-            !p.isGoal && mouseX > p.x && mouseX < p.x + p.w && mouseY > p.y && mouseY < p.y + p.h
-        );
-
+        const pt = canvasPoint(e);
+        const clickedPlatform = platforms.find(p => bombablePlatform(p) &&
+            pt.x > p.x - 8 && pt.x < p.x + p.w + 8 && pt.y > p.y - BOMB_TAP_PAD && pt.y < p.y + p.h + BOMB_TAP_PAD);
+        bombActive = false;
+        gameActive = true;
         if (clickedPlatform) {
             clickedPlatform.isBroken = true;
             createExplosion(clickedPlatform.x + clickedPlatform.w / 2, clickedPlatform.y, 1.5);
-            bombActive = false;
-            gameActive = true;
+            sfx('explosion');
             showFeedback("¡BOMBA EXPLOTADA!");
-            return;
+        } else { // toque fuera de una plataforma: se cancela y la bomba vuelve al inventario
+            if (inventory.length < MAX_INV) inventory.push('bomb');
+            updateInventoryUI();
+            showFeedback("💣 Bomba cancelada");
         }
+        return;
     }
 
     if (!gameActive) return;
 
     // Rescate en el último segundo: los toques van a los botones, no a la barra de precisión
     if (rescue.active) {
-        const rect = canvas.getBoundingClientRect();
-        const pt = (e.touches && e.touches.length) ? e.touches[0] : e;
-        rescuePress(pt.clientX - rect.left, pt.clientY - rect.top);
+        const cp = canvasPoint(e);
+        rescuePress(cp.x, cp.y);
         return;
     }
 
@@ -2646,9 +2758,7 @@ const triggerAction = (e) => {
 
     // Caja de goma: un toque sobre la propia caja (1 vez por nivel) la hace botar como una plataforma-resorte
     if (boxKind() === 'rubber' && !rubberBoostUsed) {
-        const rect = canvas.getBoundingClientRect();
-        const pt = (e.touches && e.touches.length) ? e.touches[0] : e;
-        const tx = pt.clientX - rect.left, ty = pt.clientY - rect.top, pad = 22;
+        const cp = canvasPoint(e), tx = cp.x, ty = cp.y, pad = 22;
         if (tx >= player.x - pad && tx <= player.x + player.w + pad && ty >= player.y - pad && ty <= player.y + player.h + pad) {
             rubberBoost();
             return;
@@ -2657,9 +2767,7 @@ const triggerAction = (e) => {
 
     // Caja gravitatoria: un toque sobre la propia caja (1 vez por nivel) invierte la gravedad 3 s
     if (boxKind() === 'gravity' && !gravBoostUsed && gravFlipT <= 0) {
-        const rect = canvas.getBoundingClientRect();
-        const pt = (e.touches && e.touches.length) ? e.touches[0] : e;
-        const tx = pt.clientX - rect.left, ty = pt.clientY - rect.top, pad = 22;
+        const cp = canvasPoint(e), tx = cp.x, ty = cp.y, pad = 22;
         if (tx >= player.x - pad && tx <= player.x + player.w + pad && ty >= player.y - pad && ty <= player.y + player.h + pad) {
             gravityFlip();
             return;
@@ -2670,17 +2778,13 @@ const triggerAction = (e) => {
     // pero lo limpio por si acaso quedaba algo)
     if (platformItemActive) { platformItemActive = false; }
 
+    // En el aire el toque no hace nada: así no se gasta la bola ni se pierde el combo
+    if (!player.onGround) return;
+
     const precision = precisionSystem.checkHit();
     if (precision.multiplier > 0) {
-        if (player.onGround) {
-            // Con viento: primero se apunta (medidor de ángulo); sin viento, salto directo
-            if (!(effWind() !== 0 && aim.start(precision))) handleJump(precision);
-        } else if (canDoubleJump && !doubleJumpUsed) {
-            handleJump(precision);
-            doubleJumpUsed = true;
-            canDoubleJump = false; // Se gasta al usarlo
-            showFeedback("¡SALTO DOBLE!");
-        }
+        // Con viento: primero se apunta (medidor de ángulo); sin viento o con cohete, salto directo
+        if (!(effWind() !== 0 && rocketJumps === 0 && aim.start(precision))) handleJump(precision);
     }
 };
 // Los toques sobre botones, campos de texto, modales y pantallas de UI no deben
@@ -2717,13 +2821,12 @@ const game = {
         switch (type) {
             case 'clock':
                 ballSpeedFactor = 0.5;
-                if (clockTimeoutId) clearTimeout(clockTimeoutId);
-                clockTimeoutId = setTimeout(() => { ballSpeedFactor = 1.0; clockTimeoutId = null; }, 10000);
+                clockUntil = gameTime + 10000; // 10 s de juego (no cuenta el tiempo en pausa)
                 showFeedback("⏱️ TIEMPO RALENTIZADO!");
                 break;
             case 'platform': {
                 const newP = new Platform(0, player.y + 120, width, 25, false, 'temp_full');
-                newP.vanishingStarted = true; newP.startTime = Date.now();
+                newP.vanishingStarted = true; newP.startTime = gameTime;
                 platforms.push(newP);
                 showFeedback("🏗️ PLATAFORMA CREADA!");
                 break;
@@ -2733,9 +2836,14 @@ const game = {
                 showFeedback("⚡ ZONA VERDE x5!");
                 break;
             case 'bomb':
+                if (!platforms.some(bombablePlatform)) { // nada que explotar: se devuelve
+                    inventory.splice(index, 0, 'bomb'); updateInventoryUI();
+                    showFeedback("💣 No hay plataformas que explotar");
+                    break;
+                }
                 bombActive = true;
                 gameActive = false;
-                showFeedback("💣 TOCA UNA PLATAFORMA PARA EXPLOTARLA");
+                showFeedback("💣 TOCA UNA PLATAFORMA PARA EXPLOTARLA\n(toca fuera para cancelar)");
                 break;
         }
     }
@@ -2931,7 +3039,7 @@ function closeBoxIntro() {
     document.getElementById('box-intro-modal').classList.add('hidden');
     boxIntroOpen = false;
     if (boxIntroWasActive && !runEnded) gameActive = true;
-    lastUpdateT = performance.now();
+    lastFrameT = performance.now(); stepAcc = 0;
 }
 (function () {
     const ok = document.getElementById('box-intro-ok');

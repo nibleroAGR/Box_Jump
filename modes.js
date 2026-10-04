@@ -114,7 +114,7 @@
     // =================================================================
     // 2) DATOS DE FASES (formato compartido con game.js)
     //    level = { wind:-3..3, lowG:bool, items:[{k,fx,y,w?,t?}] }
-    //    k: 'plat' | 'drone' | 'shield' | 'dj' | 'hole' | 'box'
+    //    k: 'plat' | 'drone' | 'shield' | 'dj' (cohete) | 'hole' | 'box'
     //    fx: 0..1 (posición horizontal), y: px sobre la plataforma de inicio
     //    La plataforma MÁS ALTA de cada nivel es la meta.
     // =================================================================
@@ -397,7 +397,7 @@
         { id: 'none', label: '✋ Mover' },
         ...PTYPES.map((t) => ({ id: 'plat:' + t[0], label: '▬ ' + t[1], k: 'plat', t: t[0] })),
         { id: 'drone', label: '🛸 Dron', k: 'drone' }, { id: 'shield', label: '🛡 Escudo', k: 'shield' },
-        { id: 'dj', label: '⏫ Doble salto', k: 'dj' }, { id: 'hole', label: '🌀 Agujero', k: 'hole' }, { id: 'box', label: '📦 Caja', k: 'box' }, { id: 'chest', label: '🎁 Cofre', k: 'chest' },
+        { id: 'dj', label: '🚀 Cohete', k: 'dj' }, { id: 'hole', label: '🌀 Agujero', k: 'hole' }, { id: 'box', label: '📦 Caja', k: 'box' }, { id: 'chest', label: '🎁 Cofre', k: 'chest' },
     ];
     function buildPalette() {
         const box = $('ed-palette');
@@ -421,7 +421,7 @@
         const it = ED.sel != null ? l.items[ED.sel] : null;
         if (!it) { hide(box); return; }
         show(box);
-        const names = { plat: 'Plataforma', drone: 'Dron', shield: 'Escudo', dj: 'Doble salto', hole: 'Agujero negro', box: 'Caja', chest: 'Cofre' };
+        const names = { plat: 'Plataforma', drone: 'Dron', shield: 'Escudo', dj: 'Cohete', hole: 'Agujero negro', box: 'Caja', chest: 'Cofre' };
         const goal = it.k === 'plat' && ED.sel === topIdx(l);
         let h = `<b>${names[it.k]}${goal ? ' · 🏁 META' : ''}</b>`;
         if (it.k === 'plat') {
@@ -511,9 +511,9 @@
             c.fillStyle = '#b07a3a'; c.fillRect(b.x - 1, b.y, b.w + 2, 9);
             c.fillStyle = '#ffd700'; c.fillRect(cx - 3, b.y + 5, 6, 7);
         } else {
-            c.fillStyle = it.k === 'shield' ? '#00ff64' : '#ff00ea';
+            c.fillStyle = it.k === 'shield' ? '#00ff64' : '#2f8bff';
             c.beginPath(); c.arc(cx, cy, 10, 0, Math.PI * 2); c.fill();
-            c.fillStyle = '#000'; c.font = 'bold 10px sans-serif'; c.textAlign = 'center'; c.fillText(it.k === 'shield' ? 'S' : '2J', cx, cy + 3);
+            c.fillStyle = '#000'; c.font = 'bold 10px sans-serif'; c.textAlign = 'center'; c.fillText(it.k === 'shield' ? 'S' : 'R', cx, cy + 3);
         }
         if (selected) { c.strokeStyle = '#fff'; c.lineWidth = 1.5; c.setLineDash([4, 3]); c.strokeRect(b.x - 3, b.y - 3, b.w + 6, b.h + 6); }
         c.restore();

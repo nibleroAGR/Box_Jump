@@ -778,8 +778,11 @@
     async function checkTrophies() {
         if (!currentUser) return [];
         const uid = currentUser.uid, lsKey = 'bj_trophy_checked_' + uid;
+        // El último día revisado se guarda en la cuenta (no en el navegador): así las copas no
+        // se vuelven a anunciar ni a reescribir al entrar desde otro dispositivo.
         let last = null;
-        try { last = localStorage.getItem(lsKey); } catch (e) { /* no disponible */ }
+        try { const me = await users().doc(uid).get(); last = (me.exists && me.data().trophyCheckedDay) || null; } catch (e) { /* sin red */ }
+        if (!last) { try { last = localStorage.getItem(lsKey); } catch (e) { /* no disponible */ } }
         const days = [];
         for (let i = 1; i <= 7; i++) { const k = dayKeyBack(i); if (last && k <= last) break; days.unshift(k); }
         if (!days.length) return [];
@@ -808,6 +811,7 @@
             awards.forEach((a) => { trophies[a.cat][a.day] = a.medal; });
             await users().doc(uid).set({ trophies }, { merge: true });
         }
+        try { await users().doc(uid).set({ trophyCheckedDay: dayKeyBack(1) }, { merge: true }); } catch (e) { console.warn('No se pudo guardar el día revisado:', e); }
         try { localStorage.setItem(lsKey, dayKeyBack(1)); } catch (e) { /* no disponible */ }
         return awards;
     }
