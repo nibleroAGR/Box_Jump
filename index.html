@@ -10,7 +10,7 @@
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Chakra+Petch:wght@500;600;700&family=Outfit:wght@400;500;600;700&display=swap">
     <meta name="theme-color" content="#0b0a24">
-    <link rel="stylesheet" href="style.css?v=23">
+    <link rel="stylesheet" href="style.css?v=24">
 </head>
 
 <body>
@@ -62,8 +62,9 @@
                         <p class="ranking-empty">Cargando...</p>
                     </div>
                     <div id="add-friend-row" class="hidden">
-                        <input id="friend-code-input" type="text" placeholder="Código de amigo" maxlength="40" />
-                        <button id="add-friend-btn">AÑADIR</button>
+                        <input id="friend-code-input" type="text" placeholder="Código de amigo" maxlength="40"
+                            autocomplete="off" autocapitalize="off" />
+                        <button id="add-friend-btn" type="button">ENVIAR SOLICITUD</button>
                     </div>
                     <div id="my-friend-code" class="hidden">
                         <span>Tu código: <strong id="my-code-value">-</strong></span>
@@ -88,11 +89,11 @@
                     </div>
                     <div class="settings-section">
                         <h3>Añadir amigo</h3>
-                        <p class="settings-help">Escribe el código de tu amigo para ver su clasificación.</p>
-                        <div class="settings-row">
+                        <p class="settings-help">Escribe el código de tu amigo. Le llegará una solicitud de amistad que tendrá que aceptar.</p>
+                        <div class="settings-row stacked">
                             <input id="settings-friend-input" class="settings-input" type="text" maxlength="40"
                                 placeholder="Código de amigo" autocomplete="off" autocapitalize="off" />
-                            <button id="settings-friend-btn" type="button">AÑADIR</button>
+                            <button id="settings-friend-btn" type="button">ENVIAR SOLICITUD</button>
                         </div>
                         <p id="settings-friend-msg" class="settings-msg hidden"></p>
                     </div>
@@ -318,6 +319,18 @@
                 </div>
             </div>
 
+            <!-- ================= SOLICITUD DE AMISTAD RECIBIDA ================= -->
+            <div id="friend-req-modal" class="screen hidden">
+                <div class="glass-card">
+                    <img id="friend-req-photo" class="mp-inv-photo friend-req-photo" alt="" />
+                    <p id="friend-req-text" class="mp-inv-text"></p>
+                    <p class="settings-help">Si aceptas, os veréis en el ranking de amigos y podréis retaros.</p>
+                    <button id="friend-req-accept" type="button">✔ ACEPTAR</button>
+                    <button id="friend-req-decline" class="secondary-btn ghost-btn" type="button">Rechazar</button>
+                </div>
+            </div>
+            <div id="bj-toast" class="bj-toast hidden"></div>
+
             <!-- ================= MULTIJUGADOR: CUENTA ATRÁS ================= -->
             <div id="mp-vs-screen" class="screen hidden">
                 <div class="glass-card">
@@ -366,14 +379,14 @@
         </div>
 
         <script src="audio.js?v=2"></script>
-        <script src="game.js?v=29"></script>
+        <script src="game.js?v=30"></script>
 
         <!-- SDK "compat" de Firebase: archivos únicos clásicos, sin import/export
              encadenados, para máxima compatibilidad entre navegadores/dispositivos. -->
         <script src="https://www.gstatic.com/firebasejs/10.13.2/firebase-app-compat.js"></script>
         <script src="https://www.gstatic.com/firebasejs/10.13.2/firebase-auth-compat.js"></script>
         <script src="https://www.gstatic.com/firebasejs/10.13.2/firebase-firestore-compat.js"></script>
-        <script src="backend.js?v=13"></script>
+        <script src="backend.js?v=14"></script>
         <script src="modes.js?v=6"></script>
         <script src="multiplayer.js?v=1"></script>
     </div>

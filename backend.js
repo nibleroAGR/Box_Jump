@@ -393,30 +393,175 @@
         return list;
     }
 
+    // ---------- Solicitudes de amistad ----------
+    // friendRequests/{from}_{to}: { from, to, fromName, fromPhoto, toName, status: 'pending' | 'accepted', createdAt }
+    // - Quien envía crea la solicitud (pending).
+    // - Quien la recibe ve una notificación: al aceptar se añade al otro en SU lista y marca 'accepted';
+    //   al rechazar la borra.
+    // - Quien la envió, al ver 'accepted', añade al otro en SU lista y borra la solicitud.
+    //   (Cada uno solo escribe en su propio perfil.)
+    const friendReqs = () => db.collection('friendRequests');
+    const reqId = (from, to) => from + '_' + to;
+
+    async function findUidByCode(clean) {
+        const q = await users().where('friendCodeLower', '==', clean.toLowerCase()).limit(1).get();
+        if (!q.empty) return q.docs[0].id;
+        const legacy = await users().doc(clean).get(); // compatibilidad con códigos antiguos (uid)
+        return legacy.exists ? legacy.id : null;
+    }
+
     async function addFriendByCode(code) {
         const clean = (code || '').trim();
         if (!currentUser) return { ok: false, msg: 'Inicia sesión primero' };
-        if (!clean) return { ok: false, msg: 'Código vacío' };
-        if (clean === currentUser.uid) return { ok: false, msg: 'No puedes añadirte a ti mismo' };
+        if (!clean) return { ok: false, msg: 'Escribe el código de tu amigo' };
+        const me = currentUser.uid;
         try {
-            let friendUid = null;
-            const q = await users().where('friendCodeLower', '==', clean.toLowerCase()).limit(1).get();
-            if (!q.empty) friendUid = q.docs[0].id;
-            if (!friendUid) { // compatibilidad con códigos antiguos (uid)
-                const legacy = await users().doc(clean).get();
-                if (legacy.exists) friendUid = legacy.id;
-            }
+            const friendUid = await findUidByCode(clean);
             if (!friendUid) return { ok: false, msg: 'No existe ningún jugador con ese código' };
-            if (friendUid === currentUser.uid) return { ok: false, msg: 'No puedes añadirte a ti mismo' };
-            await users().doc(currentUser.uid).update({
-                friends: firebase.firestore.FieldValue.arrayUnion(friendUid),
+            if (friendUid === me) return { ok: false, msg: 'No puedes añadirte a ti mismo' };
+
+            const [mySnap, theirSnap] = await Promise.all([users().doc(me).get(), users().doc(friendUid).get()]);
+            const mine = (mySnap.exists && mySnap.data().friends) || [];
+            const theirs = (theirSnap.exists && theirSnap.data().friends) || [];
+            const theirName = (theirSnap.exists && (theirSnap.data().username || theirSnap.data().displayName)) || 'Jugador';
+            if (mine.includes(friendUid) && theirs.includes(me)) return { ok: false, msg: `Ya eres amigo de ${theirName}` };
+
+            // ¿Esa persona ya me había enviado una solicitud? Entonces se acepta directamente.
+            const back = await friendReqs().doc(reqId(friendUid, me)).get();
+            if (back.exists && back.data().status === 'pending') {
+                await acceptFriendRequest(back.id, back.data());
+                return { ok: true, msg: `¡Ahora eres amigo de ${theirName}!` };
+            }
+            const mineReq = await friendReqs().doc(reqId(me, friendUid)).get();
+            if (mineReq.exists && mineReq.data().status === 'pending') {
+                return { ok: false, msg: `Ya enviaste una solicitud a ${theirName}. Espera a que la acepte.` };
+            }
+            if (mineReq.exists) await mineReq.ref.delete().catch(() => { /* restos de una anterior */ });
+
+            const meId = await myIdentity();
+            await friendReqs().doc(reqId(me, friendUid)).set({
+                from: me, to: friendUid,
+                fromName: meId.username, fromPhoto: meId.photoURL || '',
+                toName: theirName,
+                status: 'pending',
+                createdAt: firebase.firestore.FieldValue.serverTimestamp(),
             });
-            return { ok: true };
+            return { ok: true, msg: `Solicitud enviada a ${theirName} ✔` };
         } catch (err) {
-            console.error('No se pudo añadir amigo:', err);
-            return { ok: false, msg: 'Error al añadir amigo' };
+            console.error('No se pudo enviar la solicitud de amistad:', err);
+            return { ok: false, msg: 'No se pudo enviar la solicitud. Inténtalo de nuevo.' };
         }
     }
+
+    async function acceptFriendRequest(id, data) {
+        const me = currentUser.uid;
+        await users().doc(me).update({ friends: firebase.firestore.FieldValue.arrayUnion(data.from) });
+        await friendReqs().doc(id).update({ status: 'accepted' });
+    }
+    async function declineFriendRequest(id) {
+        await friendReqs().doc(id).delete();
+    }
+
+    // Aviso corto en la parte de arriba
+    let toastTimer = null;
+    function toast(text, ms) {
+        const el = $('bj-toast'); if (!el) return;
+        el.innerText = text;
+        el.classList.remove('hidden');
+        clearTimeout(toastTimer);
+        toastTimer = setTimeout(() => el.classList.add('hidden'), ms || 3200);
+    }
+    const playSfx = (n) => { try { if (window.SFX) window.SFX.play(n); } catch (e) { /* sin audio */ } };
+    const escHtml = (t) => String(t == null ? '' : t).replace(/[<>&"']/g, (c) => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;', '"': '&quot;', "'": '&#39;' }[c]));
+
+    // Solicitudes que me llegan: se muestran una a una, nunca en mitad de una partida
+    const reqQueue = [];
+    let reqShowing = null, reqWaitTimer = null, reqInUnsub = null, reqOutUnsub = null;
+    const isPlayingNow = () => !!(window.BJGame && window.BJGame.isPlaying && window.BJGame.isPlaying());
+
+    function pumpFriendRequests() {
+        if (reqShowing || !reqQueue.length) return;
+        if (isPlayingNow()) { // se espera a que termine la partida
+            if (!reqWaitTimer) reqWaitTimer = setInterval(() => {
+                if (!isPlayingNow()) { clearInterval(reqWaitTimer); reqWaitTimer = null; pumpFriendRequests(); }
+            }, 1500);
+            return;
+        }
+        reqShowing = reqQueue.shift();
+        const d = reqShowing.data;
+        $('friend-req-photo').src = d.fromPhoto || avatarFor(d.fromName);
+        $('friend-req-text').innerHTML = `<strong>${escHtml(d.fromName || 'Un jugador')}</strong> quiere ser tu amigo`;
+        $('friend-req-accept').disabled = false; $('friend-req-decline').disabled = false;
+        $('friend-req-modal').classList.remove('hidden');
+        playSfx('rescue_alert');
+        if (navigator.vibrate) { try { navigator.vibrate([50, 50, 50]); } catch (e) { /* sin vibración */ } }
+    }
+    function closeFriendRequest() {
+        reqShowing = null;
+        $('friend-req-modal').classList.add('hidden');
+        setTimeout(pumpFriendRequests, 300);
+    }
+    async function answerFriendRequest(accept) {
+        if (!reqShowing) return;
+        const { id, data } = reqShowing;
+        $('friend-req-accept').disabled = true; $('friend-req-decline').disabled = true;
+        try {
+            if (accept) {
+                await acceptFriendRequest(id, data);
+                toast(`🤝 ¡Ahora eres amigo de ${data.fromName || 'tu amigo'}!`);
+                playSfx('rescue_ok');
+                if (!dom.rankingModal.classList.contains('hidden')) refreshRankingView();
+            } else {
+                await declineFriendRequest(id);
+            }
+        } catch (err) {
+            console.error('No se pudo responder a la solicitud:', err);
+            toast('No se pudo responder a la solicitud. Inténtalo de nuevo.');
+            reqQueue.unshift(reqShowing); // vuelve a la cola
+        }
+        closeFriendRequest();
+    }
+
+    function listenFriendRequests() {
+        stopFriendRequests();
+        if (!currentUser) return;
+        const me = currentUser.uid;
+        // Recibidas y pendientes
+        reqInUnsub = friendReqs().where('to', '==', me).where('status', '==', 'pending').onSnapshot((snap) => {
+            snap.docChanges().forEach((ch) => {
+                const id = ch.doc.id;
+                if (ch.type === 'added') {
+                    if (!reqQueue.some((r) => r.id === id) && !(reqShowing && reqShowing.id === id)) reqQueue.push({ id, data: ch.doc.data() });
+                } else if (ch.type === 'removed') { // la cancelaron o ya se respondió
+                    const i = reqQueue.findIndex((r) => r.id === id); if (i >= 0) reqQueue.splice(i, 1);
+                }
+            });
+            pumpFriendRequests();
+        }, (e) => console.warn('No se pueden recibir solicitudes de amistad (¿reglas de Firestore?):', e));
+        // Enviadas y ya aceptadas: completo la amistad en mi lado
+        reqOutUnsub = friendReqs().where('from', '==', me).where('status', '==', 'accepted').onSnapshot((snap) => {
+            snap.docChanges().forEach(async (ch) => {
+                if (ch.type !== 'added') return;
+                const d = ch.doc.data();
+                try {
+                    await users().doc(me).update({ friends: firebase.firestore.FieldValue.arrayUnion(d.to) });
+                    await ch.doc.ref.delete();
+                    toast(`🤝 ${d.toName || 'Tu amigo'} ha aceptado tu solicitud de amistad`);
+                    playSfx('rescue_ok');
+                    if (!dom.rankingModal.classList.contains('hidden')) refreshRankingView();
+                } catch (err) { console.warn('No se pudo completar la amistad:', err); }
+            });
+        }, (e) => console.warn('No se pueden leer las solicitudes enviadas:', e));
+    }
+    function stopFriendRequests() {
+        if (reqInUnsub) { reqInUnsub(); reqInUnsub = null; }
+        if (reqOutUnsub) { reqOutUnsub(); reqOutUnsub = null; }
+        if (reqWaitTimer) { clearInterval(reqWaitTimer); reqWaitTimer = null; }
+        reqQueue.length = 0;
+        if (reqShowing) { reqShowing = null; $('friend-req-modal').classList.add('hidden'); }
+    }
+    $('friend-req-accept').addEventListener('click', () => answerFriendRequest(true));
+    $('friend-req-decline').addEventListener('click', () => answerFriendRequest(false));
 
     // ---------- Copas (oro / plata / bronce) ----------
     const DAILY_TOTAL = 10;                       // niveles de la fase diaria
@@ -613,6 +758,7 @@
 
         if (!user) {
             stopPresence();
+            stopFriendRequests();
             dom.loginBlock.classList.remove('hidden');
             dom.profileBlock.classList.add('hidden');
             dom.rankingModal.classList.add('hidden');
@@ -638,6 +784,7 @@
             dom.profileName.innerText = profile.username || user.displayName || 'Jugador';
             dom.profileAvatar.src = profile.photoURL || avatarFor(profile.username || user.email);
             startPresence();
+            listenFriendRequests();
             checkTrophies().then(showTrophyBanner).catch((err) => console.warn('Copas no disponibles:', err));
             window.dispatchEvent(new CustomEvent('bj-auth-changed', {
                 detail: {
@@ -688,7 +835,7 @@
             dom.settingsFriendBtn.disabled = true;
             const res = await addFriendByCode(dom.settingsFriendInput.value);
             dom.settingsFriendBtn.disabled = false;
-            showFriendMsg(res.ok ? 'Amigo añadido ✔' : res.msg, res.ok);
+            showFriendMsg(res.msg, res.ok);
             if (res.ok) dom.settingsFriendInput.value = '';
         });
         dom.settingsFriendInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') dom.settingsFriendBtn.click(); });
@@ -698,13 +845,13 @@
         dom.addFriendBtn.disabled = true;
         const res = await addFriendByCode(dom.friendCodeInput.value);
         dom.addFriendBtn.disabled = false;
+        toast(res.msg, 3800);
         if (res.ok) {
             dom.friendCodeInput.value = '';
             refreshRankingView();
-        } else {
-            alert(res.msg);
         }
     });
+    dom.friendCodeInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') dom.addFriendBtn.click(); });
 
     dom.settingsCodeSave.addEventListener('click', async () => {
         dom.settingsCodeSave.disabled = true;
