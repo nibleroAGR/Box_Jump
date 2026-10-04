@@ -211,6 +211,7 @@
                 friends: [],
                 savedGame: null,
                 checkpointFromRank: true, // perfil nuevo: no necesita la corrección de versiones anteriores
+                checkpointFromRank2: true, // ni la segunda corrección (partidas empezadas por error)
                 createdAt: firebase.firestore.FieldValue.serverTimestamp(),
                 updatedAt: firebase.firestore.FieldValue.serverTimestamp(),
             };
@@ -245,7 +246,10 @@
         // Corrección única (versiones anteriores): si el ranking dice que llegó más lejos que la
         // partida guardada, se le deja continuar desde el último checkpoint (múltiplo de 5) de ese nivel.
         // Ej.: partida en nivel 10 y ranking en nivel 24 -> "Continuar (Nivel 20)". Solo se hace una vez.
-        if (!data.checkpointFromRank) {
+        // Segunda corrección única (octubre 2026): jugadores que empezaron una nueva partida por error.
+        // Igual que la anterior: si el ranking va por delante de la partida guardada, se recupera el
+        // último checkpoint de su nivel del ranking. Se marca con checkpointFromRank2 y no se repite nunca más.
+        if (!data.checkpointFromRank || !data.checkpointFromRank2) {
             const rankLevel = patch.bestLevel || data.bestLevel || 1;
             const rankCheckpoint = Math.floor(rankLevel / 5) * 5;
             const savedLevel = (data.savedGame && data.savedGame.level) || 0;
@@ -253,6 +257,7 @@
                 patch.savedGame = { level: rankCheckpoint, updatedAt: Date.now() };
             }
             patch.checkpointFromRank = true;
+            patch.checkpointFromRank2 = true;
         }
         await ref.update(patch);
         return { ...data, ...patch };
