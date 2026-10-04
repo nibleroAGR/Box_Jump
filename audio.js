@@ -1,5 +1,5 @@
 /* ============================================================
- * BOX JUMP PRECISION - audio.js  (v2)
+ * BOX JUMP PRECISION - audio.js  (v3: música pre-renderizada, apenas gasta CPU durante el juego)
  * Música y efectos 100 % sintetizados con Web Audio (sin archivos, funciona sin conexión).
  *
  * Mezcla:  efectos ─┐                       ┌─> reverb (sala) ─┐
@@ -325,30 +325,116 @@
         }
         return sd;
     }
-    function pump() {
-        if (!ctx || !musicOn || !musicWanted || ctx.state !== 'running') return;
-        if (nextT < ctx.currentTime) nextT = ctx.currentTime + 0.05; // por si la pestaña estuvo en segundo plano
-        while (nextT < ctx.currentTime + 0.25) {
-            nextT += scheduleStep(nextT, step);
-            step = (step + 1) % 128;
+    // ---------- música pre-renderizada ----------
+    // Antes la música se sintetizaba en directo: cada semicorchea creaba decenas de osciladores,
+    // filtros y envíos de reverb en el hilo principal, compitiendo con el juego (en móvil se notaba).
+    // Ahora cada ambiente (normal / lava / oscuro) se "graba" UNA vez con un OfflineAudioContext
+    // (fuera de tiempo real) y luego se reproduce en bucle como un simple búfer: casi 0 CPU.
+    const MUSIC_RATE = 24000;   // frecuencia de muestreo de la música grabada (suficiente y ocupa la mitad)
+    const MUSIC_TAIL = 3;       // segundos extra para las colas (reverb, notas largas) que se pliegan al inicio
+    const LOOP_STEPS = 128;     // 8 compases de semicorcheas
+    const musicBufs = {};       // mood -> AudioBuffer
+    const rendering = {};       // mood -> Promise
+    let musicSrc = null, musicSrcGain = null, playingMood = null;
+
+    function renderMood(name) {
+        if (musicBufs[name]) return Promise.resolve(musicBufs[name]);
+        if (rendering[name]) return rendering[name];
+        const OAC = window.OfflineAudioContext || window.webkitOfflineAudioContext;
+        if (!OAC) return Promise.resolve(null);
+        const m = MOODS[name];
+        const loopSec = LOOP_STEPS * (60 / m.bpm / 4);
+        const total = Math.ceil((loopSec + MUSIC_TAIL) * MUSIC_RATE);
+        let off;
+        try { off = new OAC(2, total, MUSIC_RATE); } catch (e) { return Promise.resolve(null); }
+
+        // Se apunta momentáneamente el sintetizador al contexto offline (todo es síncrono)
+        const saved = { ctx, revIn, noiseBuf, musicBus, moodName };
+        try {
+            ctx = off;
+            const outO = off.createGain(); outO.gain.value = 1; outO.connect(off.destination);
+            const conv = off.createConvolver(); conv.buffer = makeImpulse(2.1, 2.6);
+            const revGain = off.createGain(); revGain.gain.value = 0.55;
+            const revLp = off.createBiquadFilter(); revLp.type = 'lowpass'; revLp.frequency.value = 5200;
+            revIn = off.createGain(); revIn.connect(conv); conv.connect(revLp); revLp.connect(revGain); revGain.connect(outO);
+            musicBus = off.createGain(); musicBus.gain.value = 1; musicBus.connect(outO);
+            noiseBuf = off.createBuffer(1, MUSIC_RATE * 2, MUSIC_RATE);
+            const nd = noiseBuf.getChannelData(0);
+            for (let i = 0; i < nd.length; i++) nd[i] = Math.random() * 2 - 1;
+            moodName = name;
+            let t = 0.0001;
+            for (let st = 0; st < LOOP_STEPS; st++) t += scheduleStep(t, st);
+        } catch (e) {
+            console.warn('No se pudo preparar la música', e);
+        } finally {
+            ctx = saved.ctx; revIn = saved.revIn; noiseBuf = saved.noiseBuf; musicBus = saved.musicBus; moodName = saved.moodName;
         }
+
+        rendering[name] = new Promise((resolve) => {
+            off.oncomplete = (ev) => resolve(ev.renderedBuffer);
+            const r = off.startRendering();
+            if (r && r.then) r.then(resolve, () => resolve(null));
+        }).then((buf) => {
+            if (!buf) return null;
+            // Bucle sin cortes: la cola que sobra del final se suma al principio
+            const loopLen = Math.round(loopSec * MUSIC_RATE);
+            const loop = off.createBuffer(2, loopLen, MUSIC_RATE); // (createBuffer: compatible también con Safari antiguo)
+            for (let c = 0; c < 2; c++) {
+                const src = buf.getChannelData(c), dst = loop.getChannelData(c);
+                dst.set(src.subarray(0, loopLen));
+                for (let i = loopLen; i < src.length; i++) dst[i - loopLen] += src[i];
+            }
+            musicBufs[name] = loop;
+            if (musicWanted && musicOn && name === moodName && playingMood !== name) playMood(name);
+            return loop;
+        }).catch(() => null);
+        return rendering[name];
+    }
+    // Se graban los tres ambientes al cargar (el normal primero), con pausas para no dar tirones
+    function prerenderAll() {
+        renderMood('normal')
+            .then(() => new Promise((r) => setTimeout(r, 400))).then(() => renderMood('lava'))
+            .then(() => new Promise((r) => setTimeout(r, 400))).then(() => renderMood('dark'));
+    }
+
+    function playMood(name) {
+        if (!ctx || !musicBus) return;
+        const buf = musicBufs[name];
+        if (!buf) { renderMood(name); return; }           // empezará solo cuando termine de grabarse
+        const t = ctx.currentTime, FADE = 0.8;
+        if (musicSrc) { // fundido cruzado con el ambiente anterior
+            const oldSrc = musicSrc, oldGain = musicSrcGain;
+            oldGain.gain.cancelScheduledValues(t);
+            oldGain.gain.setValueAtTime(oldGain.gain.value, t);
+            oldGain.gain.linearRampToValueAtTime(0, t + FADE);
+            try { oldSrc.stop(t + FADE + 0.05); } catch (e) { /* ya parada */ }
+        }
+        const src = ctx.createBufferSource(), g = ctx.createGain();
+        src.buffer = buf; src.loop = true;
+        g.gain.setValueAtTime(0, t);
+        g.gain.linearRampToValueAtTime(1, t + (musicSrc ? FADE : 0.05));
+        src.connect(g); g.connect(musicBus);
+        src.start(t);
+        musicSrc = src; musicSrcGain = g; playingMood = name;
     }
     function startMusicLoop() {
         if (!ctx || timer) return;
-        nextT = ctx.currentTime + 0.1;
+        timer = true; // la música está sonando (o esperando a estar grabada)
         musicBus.gain.cancelScheduledValues(ctx.currentTime);
         musicBus.gain.setValueAtTime(musicBus.gain.value, ctx.currentTime);
         musicBus.gain.linearRampToValueAtTime(MUSIC_VOL, ctx.currentTime + 1.2);
-        timer = setInterval(pump, 40);
-        pump();
+        playMood(moodName);
     }
     function stopMusicLoop() {
-        if (timer) { clearInterval(timer); timer = null; }
+        timer = null;
         if (ctx && musicBus) {
-            musicBus.gain.cancelScheduledValues(ctx.currentTime);
-            musicBus.gain.setValueAtTime(musicBus.gain.value, ctx.currentTime);
-            musicBus.gain.linearRampToValueAtTime(0, ctx.currentTime + 0.6);
+            const t = ctx.currentTime;
+            musicBus.gain.cancelScheduledValues(t);
+            musicBus.gain.setValueAtTime(musicBus.gain.value, t);
+            musicBus.gain.linearRampToValueAtTime(0, t + 0.6);
+            if (musicSrc) { try { musicSrc.stop(t + 0.65); } catch (e) { /* ya parada */ } }
         }
+        musicSrc = null; musicSrcGain = null; playingMood = null;
     }
 
     // ---------- API ----------
@@ -357,18 +443,25 @@
         unlock,
         musicStart() { musicWanted = true; step = 0; if (musicOn && ensure()) { if (ctx.state !== 'running') { try { ctx.resume(); } catch (e) { /* ignorar */ } } stopMusicLoop(); startMusicLoop(); } },
         musicStop() { musicWanted = false; stopMusicLoop(); },
-        mood(name) { if (MOODS[name] && name !== moodName) moodName = name; },
+        mood(name) {
+            if (!MOODS[name] || name === moodName) return;
+            moodName = name;
+            if (timer && musicOn && musicWanted) playMood(name);
+        },
         setMusic(on) {
             musicOn = !!on; writeBool(KEY_MUSIC, musicOn);
             if (!musicOn) stopMusicLoop();
-            else if (musicWanted && ensure()) startMusicLoop();
+            else { prerenderAll(); if (musicWanted && ensure()) startMusicLoop(); }
         },
         setSfx(on) { sfxOn = !!on; writeBool(KEY_SFX, sfxOn); if (sfxOn) play('click'); },
         musicEnabled() { return musicOn; },
         sfxEnabled() { return sfxOn; },
-        _debug: { names: () => Object.keys(FX), pump, state: () => ({ timer: !!timer, musicWanted, moodName, step }) },
+        _debug: { names: () => Object.keys(FX), state: () => ({ playing: playingMood, musicWanted, moodName, ready: Object.keys(musicBufs) }) },
     };
     window.SFX = SFX;
+
+    // Grabar la música en segundo plano poco después de cargar (mientras se está en el menú)
+    if (musicOn) setTimeout(prerenderAll, 600);
 
     // El navegador solo permite audio tras un gesto del usuario
     ['pointerdown', 'touchstart', 'mousedown', 'keydown'].forEach((ev) => window.addEventListener(ev, unlock, { passive: true }));
