@@ -1204,3 +1204,169 @@ button:disabled { opacity: 0.35; pointer-events: none; filter: grayscale(0.6); }
 .vs-count { font-size: 3.6rem; font-weight: 900; line-height: 1; margin: 0.2rem 0 0.6rem; }
 .vs-names { font-size: 0.85rem; opacity: 0.8; }
 #mp-result-screen { z-index: 270; }
+
+/* =====================================================================
+   ESTILO v2 — "Ascenso nocturno"
+   Paleta: noche índigo, cian (la caja), ámbar (metas), rosa (peligro), niebla (texto)
+   Tipos: Chakra Petch (títulos, HUD, botones) + Outfit (texto)
+   ===================================================================== */
+:root {
+    --night: #0b0a24;
+    --ink: #070818;
+    --cyan: #3ef0ff;
+    --amber: #ffb547;
+    --gold: #ffcf4a;
+    --rose: #ff5c8a;
+    --violet: #a46bff;
+    --mist: #c9d3ff;
+    --line: rgba(201, 211, 255, 0.14);
+    --panel: rgba(14, 15, 42, 0.72);
+    --display: 'Chakra Petch', 'Outfit', system-ui, sans-serif;
+    --primary: var(--cyan);
+    --accent: var(--amber);
+}
+* { font-family: 'Outfit', 'Inter', -apple-system, system-ui, sans-serif; }
+body { background: #04040e; }
+#game-container { background: linear-gradient(180deg, #1b1446 0%, #4a2363 100%); box-shadow: 0 0 120px rgba(0, 0, 0, 0.7); }
+
+/* ---------- HUD ---------- */
+.hud-item {
+    background: var(--panel);
+    backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px);
+    border: 1px solid var(--line);
+    border-radius: 14px;
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.07), 0 8px 24px rgba(0, 0, 0, 0.35);
+    padding: 7px 14px 8px;
+}
+.hud-label { font-family: var(--display); font-weight: 600; font-size: 0.58rem; letter-spacing: 0.2em; color: var(--mist); opacity: 0.65; }
+#level-value, #score-value {
+    font-family: var(--display); font-weight: 700; font-size: 1.32rem; color: #fff;
+    text-shadow: 0 0 14px rgba(62, 240, 255, 0.55); font-variant-numeric: tabular-nums; line-height: 1.15;
+}
+#score-container small, #best-label { color: var(--mist); opacity: 0.6; }
+.inv-slot {
+    background: var(--panel); border: 1px solid var(--line); border-radius: 12px;
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.06);
+}
+.inv-slot::after { background: var(--cyan); color: var(--ink); font-family: var(--display); }
+#menu-toggle { background: var(--panel); border-color: var(--line); }
+#menu-toggle span { background: var(--mist); }
+
+/* ---------- mensajes en pantalla ---------- */
+#msg-text {
+    font-family: var(--display); font-weight: 700; font-size: 2.05rem; letter-spacing: 0.02em;
+    white-space: pre-line; line-height: 1.15;
+    text-shadow: 0 0 18px currentColor, 0 2px 0 rgba(0, 0, 0, 0.45);
+    animation: msgPop 1.15s cubic-bezier(0.2, 0.9, 0.3, 1) forwards;
+}
+@keyframes msgPop {
+    0% { opacity: 0; transform: translateY(10px) scale(0.7); }
+    14% { opacity: 1; transform: translateY(0) scale(1.08); }
+    26% { transform: scale(1); }
+    78% { opacity: 1; transform: translateY(-8px); }
+    100% { opacity: 0; transform: translateY(-22px); }
+}
+@media (prefers-reduced-motion: reduce) { #msg-text { animation: fadeOut 1s forwards; } }
+
+/* ---------- pantallas y tarjetas ---------- */
+.screen {
+    background: radial-gradient(120% 80% at 50% 0%, rgba(74, 35, 99, 0.45), rgba(4, 4, 14, 0.82));
+    backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px);
+}
+.glass-card {
+    background: linear-gradient(180deg, rgba(26, 24, 66, 0.9), rgba(10, 10, 30, 0.94));
+    border: 1px solid var(--line);
+    border-radius: 22px;
+    box-shadow: 0 30px 70px rgba(0, 0, 0, 0.55), inset 0 1px 0 rgba(255, 255, 255, 0.07);
+    animation: cardIn 0.45s cubic-bezier(0.2, 0.9, 0.3, 1);
+}
+@keyframes cardIn { from { opacity: 0; transform: translateY(14px) scale(0.98); } to { opacity: 1; transform: none; } }
+h2 { font-family: var(--display); font-weight: 700; letter-spacing: 0.02em; color: #fff; }
+.settings-help, .auth-hint { color: var(--mist); opacity: 0.75; }
+
+/* ---------- logo ---------- */
+#start-screen h1 {
+    font-family: var(--display); font-weight: 700; font-size: 2.85rem; line-height: 1; letter-spacing: 0.01em;
+    background: none; -webkit-text-fill-color: #fff; color: #fff;
+    text-shadow: 0 1px 0 #26c8dc, 0 2px 0 #1eaabf, 0 3px 0 #188da0, 0 4px 0 #126f80, 0 5px 0 #0c5160,
+        0 14px 30px rgba(62, 240, 255, 0.35);
+    margin: 0.4rem 0 0.35rem;
+}
+#start-screen h1::before {
+    content: ''; display: block; width: 26px; height: 26px; margin: 0 auto 0.9rem;
+    border-radius: 6px; background: linear-gradient(180deg, #9ffbff, #3ef0ff 45%, #0fa3c4);
+    box-shadow: 0 0 22px rgba(62, 240, 255, 0.7), inset 0 0 0 2px rgba(255, 255, 255, 0.55);
+    animation: logoHop 2.4s cubic-bezier(0.3, 0, 0.3, 1) infinite;
+}
+@keyframes logoHop {
+    0%, 55%, 100% { transform: translateY(0) rotate(0) scale(1, 1); }
+    62% { transform: translateY(0) scale(1.15, 0.85); }
+    75% { transform: translateY(-14px) rotate(90deg) scale(0.95, 1.05); }
+    88% { transform: translateY(0) rotate(90deg) scale(1.12, 0.88); }
+}
+@media (prefers-reduced-motion: reduce) { #start-screen h1::before { animation: none; } }
+#start-screen .glass-card > p:first-of-type { color: var(--mist); opacity: 0.7; font-size: 0.9rem; margin-bottom: 0.4rem; }
+#profile-avatar { border: 2px solid var(--cyan); box-shadow: 0 0 0 4px rgba(62, 240, 255, 0.12), 0 0 22px rgba(62, 240, 255, 0.35); }
+#profile-name { font-family: var(--display); font-weight: 600; }
+
+/* ---------- botones ---------- */
+button {
+    font-family: var(--display); font-weight: 700; letter-spacing: 0.03em;
+    background: linear-gradient(180deg, #7ff7ff, #22cfe6);
+    color: #061022;
+    border-radius: 14px;
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.6), inset 0 -3px 0 rgba(0, 0, 0, 0.18), 0 10px 24px rgba(30, 210, 235, 0.25);
+    transition: transform 0.12s ease, box-shadow 0.2s ease, filter 0.2s ease;
+}
+button:hover { filter: brightness(1.06); }
+button:active { transform: translateY(2px) scale(0.99); opacity: 1; }
+button:focus-visible { outline: 2px solid #fff; outline-offset: 3px; }
+
+/* modos del menú: el principal en cian sólido; el resto, cristal con una marca de color */
+.menu-btn, #daily-btn, #creator-btn, #menu-settings-btn, #mp-btn {
+    background: linear-gradient(180deg, rgba(255, 255, 255, 0.08), rgba(255, 255, 255, 0.025));
+    color: #eef1ff;
+    border: 1px solid var(--line);
+    box-shadow: inset 4px 0 0 var(--mark, var(--mist)), inset 0 1px 0 rgba(255, 255, 255, 0.06), 0 6px 18px rgba(0, 0, 0, 0.25);
+    padding-left: 1.15rem;
+}
+#new-game-btn, #start-btn {
+    background: linear-gradient(180deg, #7ff7ff, #22cfe6); color: #061022; border: none;
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.6), inset 0 -3px 0 rgba(0, 0, 0, 0.18), 0 12px 26px rgba(30, 210, 235, 0.3);
+}
+#daily-btn { --mark: var(--amber); }
+#mp-btn { --mark: var(--rose); }
+#creator-btn { --mark: var(--violet); }
+#menu-settings-btn { --mark: rgba(201, 211, 255, 0.5); color: var(--mist); }
+.cup-btn {
+    background: linear-gradient(180deg, rgba(255, 207, 74, 0.16), rgba(255, 207, 74, 0.05));
+    border: 1px solid rgba(255, 207, 74, 0.3);
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08);
+    font-size: 1.35rem;
+}
+.secondary-btn {
+    background: rgba(255, 255, 255, 0.05); color: var(--cyan); border: 1px solid var(--line);
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.05);
+}
+.ghost-btn { background: transparent; border-color: transparent; color: rgba(201, 211, 255, 0.6); box-shadow: none; font-family: 'Outfit', sans-serif; font-weight: 500; letter-spacing: 0; }
+.danger-btn { background: linear-gradient(180deg, #ff8aa8, #ff4f7f); color: #2a0010; }
+button:disabled { box-shadow: none; }
+
+/* ---------- ranking y listas ---------- */
+.rank-tab { background: rgba(255, 255, 255, 0.04); color: var(--mist); border: 1px solid var(--line); box-shadow: none; }
+.rank-tab.active { background: linear-gradient(180deg, #7ff7ff, #22cfe6); color: #061022; border-color: transparent; }
+.ranking-row, .mp-friend { background: rgba(255, 255, 255, 0.045); border: 1px solid var(--line); }
+.ranking-row.me { border-color: rgba(62, 240, 255, 0.55); background: rgba(62, 240, 255, 0.08); }
+.rank-pos, .rank-score { font-family: var(--display); font-variant-numeric: tabular-nums; }
+
+/* ---------- fin de partida ---------- */
+.stats-final span { font-family: var(--display); color: #fff; text-shadow: 0 0 14px rgba(62, 240, 255, 0.5); }
+#go-title { font-size: 1.8rem; }
+.vs-count { font-family: var(--display); color: #fff; text-shadow: 0 0 24px rgba(255, 207, 74, 0.6); }
+.vs-mid { font-family: var(--display); color: var(--gold); }
+#msg-overlay { width: 86%; max-width: 420px; }
+#msg-text .msg-main { display: block; }
+#msg-text .msg-sub {
+    display: block; margin-top: 0.35rem; font-family: 'Outfit', sans-serif; font-weight: 600;
+    font-size: 0.95rem; letter-spacing: 0; color: #eef1ff; text-shadow: 0 2px 8px rgba(0, 0, 0, 0.6);
+}

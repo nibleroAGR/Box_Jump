@@ -1,11 +1,17 @@
 /* ============================================================
- * BOX JUMP PRECISION - audio.js
- * Música y efectos de sonido 100 % sintetizados con Web Audio:
- * no hay archivos de audio que descargar y funciona sin conexión.
+ * BOX JUMP PRECISION - audio.js  (v2)
+ * Música y efectos 100 % sintetizados con Web Audio (sin archivos, funciona sin conexión).
  *
- *   SFX.play(nombre, opciones)   efecto de sonido
- *   SFX.musicStart() / musicStop()   música de fondo
- *   SFX.mood('normal' | 'lava' | 'dark')   cambia el ambiente de la música
+ * Mezcla:  efectos ─┐                       ┌─> reverb (sala) ─┐
+ *          música ──┴─> bus ─> EQ ─> limitador ─────────────────┴─> salida
+ *  - reverberación generada al vuelo (cola de 2 s) para dar espacio
+ *  - panorama estéreo en efectos y arpegios
+ *  - la música se "aparta" (ducking) en los efectos grandes
+ *
+ * API (igual que antes):
+ *   SFX.play(nombre, opciones)          efecto de sonido
+ *   SFX.musicStart() / musicStop()      música de fondo
+ *   SFX.mood('normal' | 'lava' | 'dark')
  *   SFX.setMusic(bool) / setSfx(bool)   interruptores (se guardan en el navegador)
  * ============================================================ */
 (function () {
@@ -17,194 +23,314 @@
 
     let musicOn = readBool(KEY_MUSIC, true);
     let sfxOn = readBool(KEY_SFX, true);
-    let ctx = null, master = null, sfxBus = null, musicBus = null, noiseBuf = null;
-    let musicWanted = false;      // el juego pide música (partida en curso)
-    let timer = null;             // planificador de la música
-    let moodName = 'normal';
-    let step = 0, nextT = 0;      // posición de la música (semicorcheas)
-    const MUSIC_VOL = 0.30;
+    let ctx = null, out = null, sfxBus = null, musicBus = null, revIn = null, noiseBuf = null;
+    let musicWanted = false, timer = null, moodName = 'normal', step = 0, nextT = 0;
+    const MUSIC_VOL = 0.42;
     const lastPlayed = {};
-
     const mtof = (m) => 440 * Math.pow(2, (m - 69) / 12);
+    const rnd = (a, b) => a + Math.random() * (b - a);
 
-    // ---------- contexto de audio (se crea en el primer toque del usuario) ----------
+    // ---------- contexto y cadena de mezcla ----------
+    function makeImpulse(seconds, decay) {
+        const len = Math.floor(ctx.sampleRate * seconds), buf = ctx.createBuffer(2, len, ctx.sampleRate);
+        for (let c = 0; c < 2; c++) {
+            const d = buf.getChannelData(c);
+            for (let i = 0; i < len; i++) d[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / len, decay);
+        }
+        return buf;
+    }
     function ensure() {
         if (ctx) return ctx;
         const AC = window.AudioContext || window.webkitAudioContext;
         if (!AC) return null;
         try { ctx = new AC(); } catch (e) { ctx = null; return null; }
-        const comp = ctx.createDynamicsCompressor(); // evita que se sature al sonar varias cosas a la vez
-        comp.connect(ctx.destination);
-        master = ctx.createGain(); master.gain.value = 0.9; master.connect(comp);
-        sfxBus = ctx.createGain(); sfxBus.gain.value = 0.6; sfxBus.connect(master);
-        musicBus = ctx.createGain(); musicBus.gain.value = 0; musicBus.connect(master);
-        noiseBuf = ctx.createBuffer(1, ctx.sampleRate, ctx.sampleRate);
+
+        // limitador final: nada satura aunque suenen muchas cosas a la vez
+        const limiter = ctx.createDynamicsCompressor();
+        limiter.threshold.value = -10; limiter.knee.value = 6; limiter.ratio.value = 12;
+        limiter.attack.value = 0.003; limiter.release.value = 0.18;
+        limiter.connect(ctx.destination);
+        // EQ suave: quita barro en graves y un poco de dureza en agudos
+        const hp = ctx.createBiquadFilter(); hp.type = 'highpass'; hp.frequency.value = 32;
+        const shelf = ctx.createBiquadFilter(); shelf.type = 'highshelf'; shelf.frequency.value = 9000; shelf.gain.value = -3;
+        hp.connect(shelf); shelf.connect(limiter);
+        out = ctx.createGain(); out.gain.value = 0.85; out.connect(hp);
+
+        // reverb de sala
+        const conv = ctx.createConvolver(); conv.buffer = makeImpulse(2.1, 2.6);
+        const revGain = ctx.createGain(); revGain.gain.value = 0.55;
+        const revLp = ctx.createBiquadFilter(); revLp.type = 'lowpass'; revLp.frequency.value = 5200;
+        revIn = ctx.createGain(); revIn.connect(conv); conv.connect(revLp); revLp.connect(revGain); revGain.connect(out);
+
+        sfxBus = ctx.createGain(); sfxBus.gain.value = 0.62; sfxBus.connect(out);
+        musicBus = ctx.createGain(); musicBus.gain.value = 0; musicBus.connect(out);
+
+        noiseBuf = ctx.createBuffer(1, ctx.sampleRate * 2, ctx.sampleRate);
         const d = noiseBuf.getChannelData(0);
         for (let i = 0; i < d.length; i++) d[i] = Math.random() * 2 - 1;
         return ctx;
     }
     function unlock() {
         if (!ensure()) return;
-        if (ctx.state === 'suspended') { try { ctx.resume(); } catch (e) { /* ignorar */ } }
+        if (ctx.state !== 'running') { try { ctx.resume(); } catch (e) { /* ignorar */ } }
         if (musicWanted && musicOn && !timer) startMusicLoop();
     }
 
-    // ---------- bloques básicos ----------
-    function tone(freq, dur, o) {
+    // salida de una voz: panorama + envío a reverb
+    function route(node, o, t, end) {
+        const pan = ctx.createStereoPanner ? ctx.createStereoPanner() : null;
+        let last = node;
+        if (pan) { pan.pan.value = Math.max(-1, Math.min(1, o.pan || 0)); last.connect(pan); last = pan; }
+        last.connect(o.bus || sfxBus);
+        if (o.rev) { const s = ctx.createGain(); s.gain.value = o.rev; last.connect(s); s.connect(revIn); }
+    }
+
+    // ---------- instrumentos ----------
+    // voz: 1-3 osciladores (desafinados), filtro con envolvente y ADSR
+    function voice(freq, dur, o) {
         o = o || {};
         if (!ctx) return;
-        const t = ctx.currentTime + (o.at || 0);
-        const osc = ctx.createOscillator(), g = ctx.createGain();
-        osc.type = o.type || 'square';
-        osc.frequency.setValueAtTime(Math.max(1, freq), t);
-        if (o.to) osc.frequency.exponentialRampToValueAtTime(Math.max(1, o.to), t + dur);
-        const v = o.vol === undefined ? 0.3 : o.vol;
+        const t = ctx.currentTime + Math.max(0, o.at || 0);
+        const a = o.attack || 0.004, dcy = o.decay === undefined ? dur * 0.5 : o.decay;
+        const sus = o.sustain === undefined ? 0.35 : o.sustain, rel = o.release || 0.08;
+        const v = o.vol === undefined ? 0.25 : o.vol;
+        const g = ctx.createGain();
         g.gain.setValueAtTime(0.0001, t);
-        g.gain.exponentialRampToValueAtTime(Math.max(0.0002, v), t + (o.attack || 0.005));
-        g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
-        osc.connect(g); g.connect(o.bus || sfxBus);
-        osc.start(t); osc.stop(t + dur + 0.05);
+        g.gain.exponentialRampToValueAtTime(Math.max(0.0002, v), t + a);
+        g.gain.exponentialRampToValueAtTime(Math.max(0.0002, v * Math.max(0.001, sus)), t + a + dcy);
+        g.gain.setValueAtTime(Math.max(0.0002, v * Math.max(0.001, sus)), t + Math.max(a + dcy, dur));
+        g.gain.exponentialRampToValueAtTime(0.0001, t + dur + rel);
+        let head = g;
+        if (o.cutoff) {
+            const f = ctx.createBiquadFilter();
+            f.type = o.ftype || 'lowpass'; f.Q.value = o.q || 0.8;
+            f.frequency.setValueAtTime(o.cutoff, t);
+            if (o.cutTo) f.frequency.exponentialRampToValueAtTime(Math.max(40, o.cutTo), t + (o.cutTime || dur));
+            f.connect(g); head = f;
+        }
+        const detunes = o.detune ? [-o.detune, o.detune] : [0];
+        if (o.sub) detunes.push('sub');
+        detunes.forEach((dt) => {
+            const osc = ctx.createOscillator();
+            osc.type = dt === 'sub' ? 'sine' : (o.type || 'square');
+            const f0 = dt === 'sub' ? freq / 2 : freq;
+            osc.frequency.setValueAtTime(Math.max(1, f0), t);
+            if (o.to) osc.frequency.exponentialRampToValueAtTime(Math.max(1, dt === 'sub' ? o.to / 2 : o.to), t + (o.glide || dur));
+            if (dt !== 'sub' && dt) osc.detune.value = dt;
+            if (o.vib) { const l = ctx.createOscillator(), lg = ctx.createGain(); l.frequency.value = o.vib; lg.gain.value = f0 * 0.012; l.connect(lg); lg.connect(osc.frequency); l.start(t); l.stop(t + dur + rel + 0.05); }
+            const og = ctx.createGain(); og.gain.value = dt === 'sub' ? 0.6 : 1 / Math.max(1, detunes.length - (o.sub ? 1 : 0));
+            osc.connect(og); og.connect(head);
+            osc.start(t); osc.stop(t + dur + rel + 0.05);
+        });
+        route(g, o, t, dur + rel);
     }
+    // ruido filtrado (golpes, explosiones, viento)
     function noise(dur, o) {
         o = o || {};
         if (!ctx || !noiseBuf) return;
-        const t = ctx.currentTime + (o.at || 0);
+        const t = ctx.currentTime + Math.max(0, o.at || 0);
         const src = ctx.createBufferSource(), f = ctx.createBiquadFilter(), g = ctx.createGain();
         src.buffer = noiseBuf; src.loop = true;
-        f.type = o.filter || 'lowpass';
+        f.type = o.filter || 'lowpass'; f.Q.value = o.q || 0.7;
         f.frequency.setValueAtTime(o.f0 || 1000, t);
-        if (o.f1) f.frequency.exponentialRampToValueAtTime(Math.max(20, o.f1), t + dur);
+        if (o.f1) f.frequency.exponentialRampToValueAtTime(Math.max(30, o.f1), t + dur);
         const v = o.vol === undefined ? 0.3 : o.vol;
         g.gain.setValueAtTime(0.0001, t);
-        g.gain.exponentialRampToValueAtTime(Math.max(0.0002, v), t + (o.attack || 0.004));
+        g.gain.exponentialRampToValueAtTime(Math.max(0.0002, v), t + (o.attack || 0.003));
         g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
-        src.connect(f); f.connect(g); g.connect(o.bus || sfxBus);
-        src.start(t, Math.random() * 0.5); src.stop(t + dur + 0.05);
+        src.connect(f); f.connect(g);
+        route(g, o, t, dur);
+        src.start(t, Math.random() * 1.5); src.stop(t + dur + 0.05);
     }
-    const arp = (notes, gap, dur, o) => notes.forEach((n, i) => tone(mtof(n), dur, Object.assign({}, o, { at: i * gap })));
+    // percusión
+    const kick = (o) => {
+        voice(160, 0.32, Object.assign({ type: 'sine', to: 42, glide: 0.11, vol: 0.55, attack: 0.002, decay: 0.12, sustain: 0.2, release: 0.12 }, o));
+        noise(0.025, Object.assign({ filter: 'highpass', f0: 3500, vol: 0.12 }, o));
+    };
+    const snare = (o) => {
+        noise(0.18, Object.assign({ filter: 'bandpass', f0: 2200, q: 0.6, vol: 0.26, rev: 0.25 }, o));
+        voice(190, 0.09, Object.assign({ type: 'triangle', to: 150, vol: 0.18, decay: 0.05, sustain: 0.1 }, o));
+    };
+    const hat = (o, open) => noise(open ? 0.22 : 0.045, Object.assign({ filter: 'highpass', f0: 8500, vol: open ? 0.07 : 0.05 }, o));
+    const clap = (o) => [0, 0.012, 0.026].forEach((d) => noise(0.08, Object.assign({}, o, { at: (o.at || 0) + d, filter: 'bandpass', f0: 1500, q: 1.2, vol: 0.16, rev: 0.3 })));
+    const arp = (notes, gap, dur, o) => notes.forEach((n, i) => voice(mtof(n), dur, Object.assign({}, o, { at: (o && o.at || 0) + i * gap, pan: (o && o.spread) ? (i % 2 ? 0.35 : -0.35) : (o && o.pan) || 0 })));
+    function duck(amount, time) { // la música se aparta un momento
+        if (!ctx || !musicBus || !musicOn || !musicWanted) return;
+        const t = ctx.currentTime, g = musicBus.gain;
+        g.cancelScheduledValues(t);
+        g.setValueAtTime(g.value, t);
+        g.linearRampToValueAtTime(MUSIC_VOL * amount, t + 0.03);
+        g.linearRampToValueAtTime(MUSIC_VOL, t + time);
+    }
 
     // ---------- efectos ----------
     const FX = {
-        click() { tone(720, 0.05, { type: 'sine', vol: 0.18, to: 540 }); },
+        click() { voice(1320, 0.04, { type: 'sine', vol: 0.12, decay: 0.03, sustain: 0.1, to: 990 }); noise(0.02, { filter: 'highpass', f0: 6000, vol: 0.04 }); },
         jump(o) {
-            const tier = o && o.tier;
-            if (tier === 'PERFECT') { tone(380, 0.16, { type: 'sine', vol: 0.34, to: 820 }); tone(760, 0.09, { type: 'square', vol: 0.09, to: 1300, at: 0.02 }); }
-            else if (tier === 'GOOD') tone(320, 0.16, { type: 'triangle', vol: 0.32, to: 640 });
-            else tone(250, 0.2, { type: 'triangle', vol: 0.3, to: 420 });
+            const tier = o && o.tier, p = rnd(-0.15, 0.15);
+            noise(0.16, { filter: 'bandpass', f0: 600, f1: 2600, q: 1.1, vol: 0.12, pan: p });           // soplido
+            if (tier === 'PERFECT') {
+                voice(392, 0.2, { type: 'triangle', to: 1046, glide: 0.16, vol: 0.26, pan: p, rev: 0.15 });
+                arp([88, 95], 0.05, 0.16, { type: 'sine', vol: 0.1, rev: 0.35, spread: true });            // destello
+            } else if (tier === 'GOOD') voice(330, 0.2, { type: 'triangle', to: 784, glide: 0.16, vol: 0.24, pan: p, rev: 0.1 });
+            else voice(262, 0.22, { type: 'triangle', to: 523, glide: 0.18, vol: 0.22, pan: p });
         },
         land(o) {
             const k = Math.min(1, Math.max(0.15, ((o && o.impact) || 6) / 14));
-            noise(0.09 + 0.06 * k, { f0: 900, f1: 200, vol: 0.2 * k + 0.05 });
-            tone(150, 0.12, { type: 'sine', vol: 0.28 * k + 0.06, to: 60 });
+            voice(130, 0.16, { type: 'sine', to: 52, glide: 0.1, vol: 0.32 * k + 0.08, decay: 0.08, sustain: 0.2 });
+            noise(0.08 + 0.07 * k, { f0: 1400, f1: 240, vol: 0.13 * k + 0.04 });
+            if (k > 0.75) noise(0.25, { f0: 500, f1: 120, vol: 0.08, rev: 0.2 });                      // eco en caídas fuertes
         },
         hit(o) {
             const tier = o && o.tier;
-            if (tier === 'PERFECT') arp([84, 88, 91], 0.045, 0.14, { type: 'triangle', vol: 0.22 });
-            else if (tier === 'GOOD') arp([79, 83], 0.05, 0.12, { type: 'triangle', vol: 0.18 });
-            else tone(180, 0.14, { type: 'sawtooth', vol: 0.12, to: 130 });
+            if (tier === 'PERFECT') { arp([84, 88, 91, 96], 0.04, 0.22, { type: 'triangle', vol: 0.15, rev: 0.4, spread: true }); voice(mtof(108), 0.3, { type: 'sine', vol: 0.05, rev: 0.6 }); }
+            else if (tier === 'GOOD') arp([79, 84], 0.05, 0.16, { type: 'triangle', vol: 0.15, rev: 0.25, spread: true });
+            else voice(196, 0.16, { type: 'sawtooth', to: 147, vol: 0.09, cutoff: 1400, cutTo: 400 });
         },
-        miss() { tone(210, 0.22, { type: 'sawtooth', vol: 0.13, to: 80 }); },
+        miss() { voice(220, 0.24, { type: 'sawtooth', to: 98, vol: 0.1, cutoff: 1800, cutTo: 300, detune: 12 }); },
         explosion() {
-            noise(0.55, { f0: 2200, f1: 120, vol: 0.5 });
-            tone(130, 0.4, { type: 'sine', vol: 0.4, to: 38 });
+            duck(0.35, 0.9);
+            noise(0.9, { f0: 3200, f1: 90, vol: 0.55, rev: 0.25 });
+            voice(110, 0.7, { type: 'sine', to: 30, glide: 0.5, vol: 0.5, decay: 0.3, sustain: 0.3 });
+            noise(0.4, { filter: 'highpass', f0: 2500, f1: 800, vol: 0.12, at: 0.05, pan: 0.4 });
+            noise(0.4, { filter: 'highpass', f0: 2500, f1: 800, vol: 0.12, at: 0.09, pan: -0.4 });
         },
-        chest() { arp([72, 76, 79, 84, 88], 0.06, 0.18, { type: 'triangle', vol: 0.22 }); noise(0.25, { filter: 'highpass', f0: 5000, vol: 0.05, at: 0.05 }); },
-        reel() { tone(980, 0.04, { type: 'square', vol: 0.12 }); },
-        item() { tone(560, 0.09, { type: 'square', vol: 0.16, to: 900 }); tone(900, 0.12, { type: 'square', vol: 0.14, to: 1250, at: 0.08 }); },
-        spring() { tone(220, 0.28, { type: 'sine', vol: 0.38, to: 900 }); tone(440, 0.2, { type: 'square', vol: 0.08, to: 1500, at: 0.04 }); },
-        shield() { tone(440, 0.18, { type: 'sine', vol: 0.3, to: 880 }); tone(660, 0.22, { type: 'sine', vol: 0.22, to: 1320, at: 0.1 }); },
-        rocket() { noise(0.7, { filter: 'bandpass', f0: 400, f1: 3200, vol: 0.28 }); tone(120, 0.6, { type: 'sawtooth', vol: 0.12, to: 400 }); },
-        gravity_on() { tone(180, 0.5, { type: 'sine', vol: 0.34, to: 950 }); tone(360, 0.5, { type: 'triangle', vol: 0.12, to: 1400, at: 0.05 }); },
-        gravity_off() { tone(900, 0.4, { type: 'sine', vol: 0.3, to: 170 }); },
-        sling_ready() { tone(300, 0.25, { type: 'triangle', vol: 0.28, to: 180 }); tone(150, 0.2, { type: 'sine', vol: 0.2, to: 90, at: 0.04 }); },
-        sling_pull() { tone(210, 0.18, { type: 'triangle', vol: 0.18, to: 340 }); },
-        sling_launch() { noise(0.35, { filter: 'bandpass', f0: 500, f1: 4000, vol: 0.3 }); tone(220, 0.3, { type: 'sawtooth', vol: 0.22, to: 1000 }); },
-        ray() { tone(110, 0.9, { type: 'sawtooth', vol: 0.12, to: 150 }); tone(114, 0.9, { type: 'sawtooth', vol: 0.1, to: 154 }); noise(0.9, { filter: 'highpass', f0: 3000, vol: 0.05 }); },
-        ray_break() { noise(0.45, { f0: 1800, f1: 90, vol: 0.45 }); tone(90, 0.35, { type: 'square', vol: 0.2, to: 40 }); },
+        chest() {
+            arp([72, 76, 79, 84, 88, 91], 0.055, 0.3, { type: 'triangle', vol: 0.16, rev: 0.45, spread: true });
+            noise(0.5, { filter: 'highpass', f0: 7000, vol: 0.05, at: 0.05, rev: 0.5 });
+        },
+        reel() { voice(1760, 0.035, { type: 'square', vol: 0.07, decay: 0.02, sustain: 0.1, cutoff: 5000 }); },
+        item() { voice(659, 0.1, { type: 'square', vol: 0.12, to: 988, cutoff: 3500, rev: 0.15 }); voice(988, 0.14, { type: 'square', vol: 0.11, to: 1319, at: 0.07, cutoff: 3500, rev: 0.2 }); },
+        spring() {
+            voice(196, 0.4, { type: 'sine', to: 1175, glide: 0.3, vol: 0.32, vib: 18, rev: 0.15 });
+            voice(392, 0.25, { type: 'square', to: 1568, glide: 0.2, vol: 0.06, at: 0.03, cutoff: 3000 });
+            noise(0.3, { filter: 'bandpass', f0: 800, f1: 4000, vol: 0.08 });
+        },
+        shield() {
+            arp([69, 76, 81, 88], 0.06, 0.4, { type: 'sine', vol: 0.18, rev: 0.6, spread: true });
+            voice(220, 0.6, { type: 'sawtooth', vol: 0.06, cutoff: 600, cutTo: 3000, detune: 15, attack: 0.08 });
+        },
+        rocket() {
+            noise(0.9, { filter: 'bandpass', f0: 300, f1: 3600, q: 0.9, vol: 0.3, rev: 0.15 });
+            voice(98, 0.8, { type: 'sawtooth', to: 392, glide: 0.7, vol: 0.12, cutoff: 600, cutTo: 2600, detune: 18 });
+        },
+        gravity_on() { voice(147, 0.7, { type: 'sine', to: 1175, glide: 0.6, vol: 0.28, vib: 7, rev: 0.4 }); voice(294, 0.6, { type: 'triangle', to: 1760, glide: 0.5, vol: 0.08, at: 0.05, rev: 0.4 }); },
+        gravity_off() { voice(1047, 0.5, { type: 'sine', to: 165, glide: 0.45, vol: 0.24, rev: 0.3 }); },
+        sling_ready() { voice(330, 0.3, { type: 'triangle', to: 196, vol: 0.22 }); noise(0.12, { filter: 'bandpass', f0: 1200, vol: 0.06 }); },
+        sling_pull() { voice(196, 0.2, { type: 'triangle', to: 392, vol: 0.14, cutoff: 1500 }); },
+        sling_launch() {
+            noise(0.4, { filter: 'bandpass', f0: 500, f1: 5000, q: 1, vol: 0.28, rev: 0.15 });
+            voice(220, 0.32, { type: 'sawtooth', to: 1200, glide: 0.25, vol: 0.16, cutoff: 1200, cutTo: 5000 });
+        },
+        ray() {
+            voice(110, 1.0, { type: 'sawtooth', to: 165, vol: 0.09, detune: 25, cutoff: 900, cutTo: 2400, attack: 0.08, vib: 9 });
+            noise(1.0, { filter: 'highpass', f0: 3500, vol: 0.04 });
+        },
+        ray_break() { duck(0.5, 0.6); noise(0.5, { f0: 2400, f1: 90, vol: 0.4, rev: 0.25 }); voice(98, 0.4, { type: 'square', to: 41, vol: 0.14, cutoff: 1200, cutTo: 200 }); },
         drone_destroy() {
-            noise(0.3, { f0: 3000, f1: 300, vol: 0.4 });
-            tone(520, 0.22, { type: 'square', vol: 0.2, to: 110 });
-            tone(700, 0.09, { type: 'square', vol: 0.14, to: 1100, at: 0.12 });
+            noise(0.35, { f0: 4000, f1: 260, vol: 0.38, rev: 0.2 });
+            voice(587, 0.24, { type: 'square', to: 110, vol: 0.14, cutoff: 3000, cutTo: 500 });
+            arp([91, 96], 0.08, 0.14, { type: 'triangle', vol: 0.1, at: 0.12, rev: 0.35, spread: true });
         },
-        lava() { noise(0.9, { f0: 260, f1: 90, vol: 0.4 }); tone(55, 0.8, { type: 'sawtooth', vol: 0.2, to: 40 }); },
-        level_up() { arp([72, 76, 79, 84], 0.07, 0.2, { type: 'triangle', vol: 0.24 }); arp([84, 88, 91], 0.07, 0.12, { type: 'square', vol: 0.05 }); },
-        unlock() { arp([67, 72, 76, 79, 84, 88], 0.07, 0.24, { type: 'triangle', vol: 0.24 }); },
-        rescue_alert() { [0, 0.18, 0.36].forEach((a) => { tone(880, 0.1, { type: 'sawtooth', vol: 0.16, at: a }); tone(660, 0.1, { type: 'sawtooth', vol: 0.16, at: a + 0.09 }); }); },
-        rescue_ok() { tone(1046, 0.1, { type: 'triangle', vol: 0.26, to: 1568 }); },
-        rescue_win() { arp([72, 76, 79, 84, 88, 91], 0.06, 0.2, { type: 'triangle', vol: 0.26 }); },
-        rescue_fail() { arp([67, 63, 60, 55], 0.1, 0.18, { type: 'sawtooth', vol: 0.15 }); },
-        game_over() { arp([67, 63, 60, 55, 48], 0.17, 0.3, { type: 'square', vol: 0.15 }); tone(55, 0.9, { type: 'sine', vol: 0.3, to: 35, at: 0.5 }); },
-        win() { arp([72, 76, 79, 84, 79, 84, 88, 91], 0.1, 0.28, { type: 'triangle', vol: 0.26 }); },
+        lava() { duck(0.5, 1.2); noise(1.1, { f0: 320, f1: 80, vol: 0.38, rev: 0.3 }); voice(55, 1.0, { type: 'sawtooth', to: 41, vol: 0.16, cutoff: 300, detune: 20 }); },
+        level_up() {
+            duck(0.45, 1.0);
+            arp([72, 76, 79, 84], 0.07, 0.3, { type: 'triangle', vol: 0.18, rev: 0.45, spread: true });
+            arp([84, 88, 91, 96], 0.07, 0.2, { type: 'square', vol: 0.04, cutoff: 4000, rev: 0.4, at: 0.02 });
+            voice(mtof(48), 0.5, { type: 'sine', vol: 0.2, at: 0.21 });
+        },
+        unlock() { duck(0.4, 1.4); arp([67, 72, 76, 79, 84, 88, 91], 0.07, 0.4, { type: 'triangle', vol: 0.17, rev: 0.55, spread: true }); },
+        rescue_alert() { [0, 0.2, 0.4].forEach((a) => { voice(988, 0.1, { type: 'square', vol: 0.09, at: a, cutoff: 3500 }); voice(740, 0.1, { type: 'square', vol: 0.09, at: a + 0.1, cutoff: 3500 }); }); },
+        rescue_ok() { voice(1047, 0.14, { type: 'triangle', vol: 0.2, to: 1568, rev: 0.35 }); },
+        rescue_win() { duck(0.4, 1.2); arp([72, 76, 79, 84, 88, 91], 0.06, 0.3, { type: 'triangle', vol: 0.18, rev: 0.5, spread: true }); },
+        rescue_fail() { arp([67, 63, 60, 55], 0.1, 0.22, { type: 'sawtooth', vol: 0.09, cutoff: 1500, cutTo: 400 }); },
+        game_over() {
+            duck(0.15, 2.5);
+            arp([69, 65, 62, 57], 0.22, 0.5, { type: 'triangle', vol: 0.16, rev: 0.5 });
+            voice(mtof(33), 1.6, { type: 'sawtooth', vol: 0.12, cutoff: 400, cutTo: 120, detune: 15, at: 0.6, attack: 0.1 });
+        },
+        win() {
+            duck(0.2, 2.2);
+            arp([72, 76, 79, 84, 79, 84, 88, 91], 0.1, 0.36, { type: 'triangle', vol: 0.18, rev: 0.45, spread: true });
+            [0, 0.4, 0.8].forEach((a) => { kick({ at: a, bus: sfxBus }); });
+            voice(mtof(96), 1.2, { type: 'sine', vol: 0.06, at: 0.8, rev: 0.7 });
+        },
     };
-    const MIN_GAP = { click: 40, land: 70, hit: 40, miss: 150, reel: 30, sling_pull: 90, jump: 60 };
+    const MIN_GAP = { click: 40, land: 70, hit: 40, miss: 150, reel: 30, sling_pull: 90, jump: 60, explosion: 60 };
 
     function play(name, opts) {
         if (!sfxOn) return;
         const fn = FX[name];
-        if (!fn) return;
-        if (!ensure()) return;
-        if (ctx.state === 'suspended') { try { ctx.resume(); } catch (e) { /* ignorar */ } return; } // sin gesto del usuario aún
+        if (!fn || !ensure()) return;
+        if (ctx.state !== 'running') { try { ctx.resume(); } catch (e) { /* ignorar */ } return; } // sin gesto del usuario aún
         const now = performance.now(), gap = MIN_GAP[name] || 0;
         if (gap && lastPlayed[name] && now - lastPlayed[name] < gap) return;
         lastPlayed[name] = now;
         try { fn(opts); } catch (e) { /* un sonido nunca debe romper el juego */ }
     }
 
-    // ---------- música: bucle de 4 compases (La menor - Fa - Do - Sol) ----------
-    const CHORDS = [
-        { root: 45, tri: [57, 60, 64] },   // Am
-        { root: 41, tri: [53, 57, 60] },   // F
-        { root: 48, tri: [55, 60, 64] },   // C
-        { root: 43, tri: [55, 59, 62] },   // G
+    // ---------- música: canción de 8 compases (A A B A') en La menor ----------
+    const PROG = [ // raíz del bajo y acorde (MIDI)
+        { r: 45, c: [57, 60, 64] }, { r: 41, c: [57, 60, 65] }, { r: 48, c: [55, 60, 64] }, { r: 43, c: [55, 59, 62] },  // Am F C G
+        { r: 41, c: [57, 60, 65] }, { r: 43, c: [55, 59, 62] }, { r: 40, c: [55, 59, 64] }, { r: 45, c: [57, 60, 64] },  // F G Em Am
     ];
-    const MELODY = [ // 8 corcheas por compás (null = silencio)
-        [76, null, 72, null, 74, 72, 69, null],
-        [77, null, 72, null, 69, null, 72, 74],
-        [79, null, 76, null, 72, 74, 76, null],
-        [74, null, 79, null, 78, 74, 71, null],
+    const LEAD = [ // corcheas por compás (null = silencio)
+        [76, null, 79, 76, 74, null, 72, null], [72, null, 74, 76, null, 72, 69, null],
+        [79, null, 76, null, 79, 81, 79, null], [74, null, 71, 74, 79, null, 78, null],
+        [77, null, 76, 74, 72, null, 74, null], [74, 76, 79, null, 81, null, 79, null],
+        [79, null, 76, null, 74, 72, 71, null], [69, null, null, null, 72, 71, 69, null],
     ];
     const MOODS = {
-        normal: { bpm: 112, melody: true, drums: 'soft', arpOct: 12, arpVol: 0.05 },
-        lava: { bpm: 142, melody: true, drums: 'drive', arpOct: 12, arpVol: 0.06 },
-        dark: { bpm: 84, melody: false, drums: 'none', arpOct: 0, arpVol: 0.045 },
+        normal: { bpm: 108, drums: 'groove', lead: true, pad: true, arpOct: 12, arpVol: 0.045, bass: 'pluck' },
+        lava:   { bpm: 136, drums: 'drive',  lead: true, pad: false, arpOct: 12, arpVol: 0.05, bass: 'drive' },
+        dark:   { bpm: 78,  drums: 'none',   lead: false, pad: true, arpOct: 0, arpVol: 0.035, bass: 'drone' },
     };
+    const MB = (o) => Object.assign({ bus: musicBus }, o);
 
     function scheduleStep(t, s) {
         const m = MOODS[moodName] || MOODS.normal;
-        const stepDur = 60 / m.bpm / 4;
-        const bar = Math.floor(s / 16) % 4, i = s % 16, ch = CHORDS[bar];
-        const out = { bus: musicBus };
+        const sd = 60 / m.bpm / 4;
+        const bar = Math.floor(s / 16) % 8, i = s % 16, ch = PROG[bar];
+        const at = t - ctx.currentTime;
+        const section = bar < 4 ? 'A' : 'B';
 
         // bajo
-        if (i === 0 || i === 8) tone(mtof(ch.root), stepDur * 6, Object.assign({ at: t - ctx.currentTime, type: 'triangle', vol: 0.3 }, out));
-        if (m.drums === 'drive' && (i === 4 || i === 12)) tone(mtof(ch.root + 12), stepDur * 3, Object.assign({ at: t - ctx.currentTime, type: 'triangle', vol: 0.18 }, out));
-        // pad largo en el ambiente oscuro
-        if (m.drums === 'none' && i === 0) ch.tri.forEach((n) => tone(mtof(n - 12), stepDur * 15, Object.assign({ at: t - ctx.currentTime, type: 'sine', vol: 0.07, attack: 0.6 }, out)));
-        // arpegio cada corchea
+        if (m.bass === 'pluck' && (i === 0 || i === 6 || i === 10)) voice(mtof(ch.r), sd * (i === 0 ? 5 : 3), MB({ at, type: 'sawtooth', vol: 0.2, cutoff: 900, cutTo: 220, cutTime: sd * 3, decay: sd * 2, sustain: 0.3, sub: true }));
+        if (m.bass === 'drive' && i % 2 === 0) voice(mtof(ch.r + (i % 4 === 2 ? 12 : 0)), sd * 1.6, MB({ at, type: 'sawtooth', vol: 0.16, cutoff: 1400, cutTo: 260, cutTime: sd * 1.5, decay: sd, sustain: 0.2 }));
+        if (m.bass === 'drone' && i === 0) voice(mtof(ch.r - 12), sd * 15, MB({ at, type: 'sine', vol: 0.18, attack: 0.4, sustain: 0.8, release: 0.6 }));
+        // pad en cada compás (entra suave)
+        if (m.pad && i === 0) ch.c.forEach((n, k) => voice(mtof(n), sd * 15, MB({ at, type: 'sawtooth', vol: 0.03, detune: 9, cutoff: moodName === 'dark' ? 700 : 1300, attack: 0.5, sustain: 0.85, release: 0.7, rev: 0.5, pan: (k - 1) * 0.4 })));
+        // arpegio con efecto ping-pong
         if (i % 2 === 0) {
-            const idx = [0, 1, 2, 1, 0, 1, 2, 1][i / 2];
-            tone(mtof(ch.tri[idx] + m.arpOct), stepDur * 1.6, Object.assign({ at: t - ctx.currentTime, type: 'square', vol: m.arpVol }, out));
+            const pat = section === 'A' ? [0, 1, 2, 1, 0, 2, 1, 2] : [2, 1, 0, 1, 2, 0, 1, 0];
+            const n = ch.c[pat[i / 2]] + m.arpOct + (i === 14 && section === 'B' ? 12 : 0);
+            voice(mtof(n), sd * 1.5, MB({ at, type: 'square', vol: m.arpVol, cutoff: 2600, cutTo: 700, cutTime: sd * 1.4, decay: sd, sustain: 0.15, rev: 0.3, pan: (i / 2) % 2 ? 0.45 : -0.45 }));
         }
-        // melodía
-        if (m.melody && i % 2 === 0) {
-            const n = MELODY[bar][i / 2];
-            if (n) tone(mtof(n), stepDur * 3, Object.assign({ at: t - ctx.currentTime, type: 'triangle', vol: 0.11, attack: 0.012 }, out));
+        // melodía (en el ambiente oscuro, campanitas sueltas)
+        if (m.lead && i % 2 === 0) {
+            const n = LEAD[bar][i / 2];
+            if (n) voice(mtof(n), sd * 2.6, MB({ at, type: 'triangle', vol: 0.085, attack: 0.01, decay: sd * 1.5, sustain: 0.45, vib: 5.5, rev: 0.35, detune: 4 }));
         }
-        // percusión
-        if (m.drums !== 'none') {
-            const kick = m.drums === 'drive' ? (i % 4 === 0) : (i === 0 || i === 8);
-            if (kick) tone(140, 0.12, Object.assign({ at: t - ctx.currentTime, type: 'sine', vol: 0.32, to: 45 }, out));
-            if (i % 4 === 2) noise(0.04, Object.assign({ at: t - ctx.currentTime, filter: 'highpass', f0: 7000, vol: m.drums === 'drive' ? 0.07 : 0.045 }, out));
-            if (m.drums === 'drive' && (i === 4 || i === 12)) noise(0.09, Object.assign({ at: t - ctx.currentTime, filter: 'bandpass', f0: 1800, vol: 0.09 }, out));
+        if (!m.lead && (i === 0 || i === 10) && bar % 2 === 0) voice(mtof(ch.c[2] + 24), sd * 6, MB({ at, type: 'sine', vol: 0.05, decay: sd * 3, sustain: 0.2, rev: 0.8, pan: i ? 0.4 : -0.4 }));
+        // batería
+        if (m.drums === 'groove') {
+            if (i === 0 || i === 7 || i === 8) kick(MB({ at }));
+            if (i === 4 || i === 12) snare(MB({ at }));
+            if (i % 2 === 0) hat(MB({ at, pan: 0.25 }), i === 14);
+            if (bar === 7 && i >= 12) snare(MB({ at, vol: 0.12 }));                       // redoble de final de vuelta
+        } else if (m.drums === 'drive') {
+            if (i % 4 === 0) kick(MB({ at }));
+            if (i === 4 || i === 12) { snare(MB({ at })); clap(MB({ at })); }
+            hat(MB({ at, pan: i % 2 ? 0.3 : -0.3 }), i % 4 === 2);
         }
-        return stepDur;
+        return sd;
     }
     function pump() {
         if (!ctx || !musicOn || !musicWanted || ctx.state !== 'running') return;
         if (nextT < ctx.currentTime) nextT = ctx.currentTime + 0.05; // por si la pestaña estuvo en segundo plano
         while (nextT < ctx.currentTime + 0.25) {
             nextT += scheduleStep(nextT, step);
-            step = (step + 1) % 64;
+            step = (step + 1) % 128;
         }
     }
     function startMusicLoop() {
@@ -212,7 +338,7 @@
         nextT = ctx.currentTime + 0.1;
         musicBus.gain.cancelScheduledValues(ctx.currentTime);
         musicBus.gain.setValueAtTime(musicBus.gain.value, ctx.currentTime);
-        musicBus.gain.linearRampToValueAtTime(MUSIC_VOL, ctx.currentTime + 0.6);
+        musicBus.gain.linearRampToValueAtTime(MUSIC_VOL, ctx.currentTime + 1.2);
         timer = setInterval(pump, 40);
         pump();
     }
@@ -221,7 +347,7 @@
         if (ctx && musicBus) {
             musicBus.gain.cancelScheduledValues(ctx.currentTime);
             musicBus.gain.setValueAtTime(musicBus.gain.value, ctx.currentTime);
-            musicBus.gain.linearRampToValueAtTime(0, ctx.currentTime + 0.5);
+            musicBus.gain.linearRampToValueAtTime(0, ctx.currentTime + 0.6);
         }
     }
 
@@ -229,7 +355,7 @@
     const SFX = {
         play,
         unlock,
-        musicStart() { musicWanted = true; step = 0; if (musicOn && ensure()) { if (ctx.state === 'suspended') { try { ctx.resume(); } catch (e) { /* ignorar */ } } stopMusicLoop(); startMusicLoop(); } },
+        musicStart() { musicWanted = true; step = 0; if (musicOn && ensure()) { if (ctx.state !== 'running') { try { ctx.resume(); } catch (e) { /* ignorar */ } } stopMusicLoop(); startMusicLoop(); } },
         musicStop() { musicWanted = false; stopMusicLoop(); },
         mood(name) { if (MOODS[name] && name !== moodName) moodName = name; },
         setMusic(on) {
