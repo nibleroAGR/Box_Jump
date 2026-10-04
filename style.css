@@ -765,10 +765,20 @@ button:active {
 
 /* iOS/Safari: con user-select:none global los inputs no dejan escribir */
 input, textarea {
-    -webkit-user-select: text;
-    user-select: text;
+    -webkit-user-select: text !important;
+    user-select: text !important;
+    -webkit-touch-callout: default;
     touch-action: auto;
+    position: relative;
+    z-index: 1;
 }
+input[type=text], input[type=search], input:not([type]), textarea {
+    -webkit-text-fill-color: #fff;   /* el texto escrito siempre visible */
+    caret-color: var(--primary);
+    -webkit-appearance: none;
+    appearance: none;
+}
+input::placeholder { -webkit-text-fill-color: rgba(255, 255, 255, 0.45); color: rgba(255, 255, 255, 0.45); }
 
 
 /* --- Barra superior: nivel | objetos | puntos, repartida a todo el ancho --- */
@@ -1389,3 +1399,11 @@ button:disabled { box-shadow: none; }
     z-index: 400; max-width: 90%; padding: 0.7rem 1.1rem; border-radius: 14px; font-size: 0.85rem; font-weight: 600;
     background: rgba(10, 22, 44, 0.95); border: 1px solid rgba(93, 255, 176, 0.5); color: #fff; text-align: center;
     box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4); pointer-events: none; }
+
+/* Escribiendo en un campo: fuera desenfoques y animaciones de la ventana.
+   En iPhone/iPad (y algunos Android) un campo dentro de una capa con backdrop-filter
+   abre el teclado pero no deja ver ni escribir el texto. */
+.screen:focus-within { backdrop-filter: none !important; -webkit-backdrop-filter: none !important; background: rgba(5, 11, 24, 0.97) !important; }
+.screen:focus-within .glass-card { animation: none !important; transform: none !important; }
+body.bj-typing .screen { backdrop-filter: none !important; -webkit-backdrop-filter: none !important; }
+body.bj-typing .glass-card { animation: none !important; transform: none !important; }

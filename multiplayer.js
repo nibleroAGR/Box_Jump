@@ -3,7 +3,7 @@
    Depende de: game.js (window.BJGame) y backend.js (window.BJFirebase)
 
    - Retar a un amigo (círculo verde = conectado, rojo = no conectado).
-   - Jugar con un desconocido: se invita a alguien de la sala que no sea amigo;
+   - Buscar partida: se invita a alguien de la sala que no sea amigo;
      si rechaza, se invita al siguiente. Si no hay nadie, se avisa.
    - Al aceptar: cuenta atrás de 10 s (foto y nombre VS foto y nombre) y
      carrera en los 5 primeros niveles de la fase del día. Gana quien
@@ -132,7 +132,7 @@
     // 2) INVITACIONES QUE ENVÍO
     // =================================================================
     let outgoing = null;     // { ref, target, kind, unsub, timer }
-    let randomQueue = [];    // candidatos de la sala para "jugar con un desconocido"
+    let randomQueue = [];    // candidatos de la sala para "buscar partida"
 
     async function sendInvite(target, kind) {
         const uid = myUid(); if (!uid) return;
@@ -198,10 +198,10 @@
         }
     }
 
-    // Jugar con un desconocido: alguien de la sala que no sea amigo
+    // Buscar partida: alguien de la sala que no sea amigo
     async function playRandom() {
         if (outgoing) { toast('Ya estás esperando una respuesta'); return; }
-        setStatus('🔎 Buscando jugadores en la sala...');
+        setStatus('🔍 Buscando partida...');
         try {
             const uid = myUid();
             const friends = new Set(await FB().myFriendUids());

@@ -1548,7 +1548,18 @@ function nextLevel() {
 }
 
 // --- UTILS ---
+// ¿Se está escribiendo en un campo de texto? (el teclado del móvil está abierto)
+const isTyping = () => { const a = document.activeElement; return !!(a && (a.tagName === 'INPUT' || a.tagName === 'TEXTAREA')); };
+document.addEventListener('focusin', () => document.body.classList.toggle('bj-typing', isTyping()));
+document.addEventListener('focusout', () => setTimeout(() => {
+    document.body.classList.toggle('bj-typing', isTyping());
+    if (!isTyping()) resize(); // el teclado se cerró: ahora sí se ajusta el lienzo
+}, 50));
+
 function resize() {
+    // Al abrir el teclado el navegador encoge la ventana: no se toca el lienzo mientras se escribe
+    // (redimensionar en ese momento roba tiempo y, en algunos móviles, el foco del campo)
+    if (width && isTyping()) return;
     const oldW = width, oldH = height;
     width = canvas.width = canvas.offsetWidth;
     height = canvas.height = canvas.offsetHeight;
@@ -2717,6 +2728,7 @@ function drawTrail() {
 // mientras dure el salto (sin zoom). Se sigue la plataforma aunque desaparezca.
 const ORIGIN_BOTTOM_MARGIN = 34;   // hueco mínimo bajo la plataforma de origen
 const PLAYER_MIN_Y = 0.12;         // el jugador nunca sube por encima de este % de la pantalla
+const GOAL_FOLLOW_Y = 0.6;         // al caer hacia una meta fuera de pantalla, la caja se mantiene a este % de altura
 let originY = null;
 
 function update(dtMs = STEP_MS) {
@@ -2795,19 +2807,38 @@ function updateCamera() {
         }
         // Al aterrizar tras un salto enorme, la cámara se recoloca con suavidad (sin salto brusco)
         if (player.onGround && diff > 8) diff = Math.max(8, diff * 0.2);
-        if (originY !== null && !player.currentPlatform) originY += diff;
-        particles.forEach(pt => pt.y += diff);
-        cameraScroll += diff;
-        player.y += diff;
-        platforms.forEach(p => p.y += diff);
-        props.forEach(pr => pr.y += diff);
-        obstacles.forEach(o => o.y += diff);
-        powerups.forEach(pu => pu.y += diff);
-        blackHoles.forEach(bh => bh.y += diff);
-        lava.y += diff; lava.targetY += diff;
-        if (rescue.rise) rescue.rise.y0 += diff; // vuelo en curso: el punto de partida baja con el mundo
+        shiftWorld(diff);
     }
 
+    // La caja ha sobrepasado la meta y vuelve a caer: si la meta se quedó por debajo de la
+    // pantalla, la cámara acompaña la caída hasta que la meta vuelve a verse. Así, si la meta
+    // está justo debajo, la caja puede aterrizar en ella; si no, sigue cayendo y se pierde.
+    if (!player.onGround && player.vy > 0) {
+        const goal = platforms.find((p) => p.isGoal && !p.isBroken);
+        const followY = height * GOAL_FOLLOW_Y;
+        if (goal && goal.y > player.y + player.h && player.y > followY) {
+            const goalLimit = height - ORIGIN_BOTTOM_MARGIN;
+            const up = Math.min(player.y - followY, goal.y - goalLimit);
+            if (up > 0) shiftWorld(-up);
+        }
+    }
+}
+
+// Desplaza todo el mundo en vertical (diff > 0: la cámara sube; diff < 0: la cámara baja)
+function shiftWorld(diff) {
+    if (!diff) return;
+    if (originY !== null && !player.currentPlatform) originY += diff;
+    particles.forEach(pt => pt.y += diff);
+    cameraScroll += diff;
+    player.y += diff;
+    if (player.prevY !== undefined) player.prevY += diff; // la colisión continua no debe notar el salto de cámara
+    platforms.forEach(p => p.y += diff);
+    props.forEach(pr => pr.y += diff);
+    obstacles.forEach(o => o.y += diff);
+    powerups.forEach(pu => pu.y += diff);
+    blackHoles.forEach(bh => bh.y += diff);
+    lava.y += diff; lava.targetY += diff;
+    if (rescue.rise) rescue.rise.y0 += diff; // vuelo en curso: el punto de partida baja con el mundo
 }
 
 function draw() {
@@ -3111,7 +3142,7 @@ const triggerAction = (e) => {
 // Los toques sobre botones, campos de texto, modales y pantallas de UI no deben
 // disparar el salto (y sobre todo no se les debe hacer preventDefault, o no
 // funcionan ni los clics ni el teclado en móvil).
-const isUiTarget = (e) => !!(e.target && e.target.closest &&
+const isUiTarget = (e) => isTyping() || !!(e.target && e.target.closest &&
     e.target.closest('button, input, textarea, a, .screen, #hud-menu, #ranking-fab, #settings-fab, #home-fab, #info-fab, #items-modal, #ranking-modal, .inv-slot'));
 window.addEventListener('mousedown', (e) => {
     if (isUiTarget(e)) return;
