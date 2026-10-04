@@ -362,7 +362,7 @@ const SHIELD_GOAL_GAP = 130;   // la plataforma del escudo queda siempre al meno
 // abajo (entonces se pone por debajo de la meta, bajando la cámara si hace falta). Así la meta siempre
 // queda por encima y se puede saltar a ella. En horizontal, donde no choque con otra plataforma.
 function shieldSpot() {
-    const goal = platforms.find((p) => p.isGoal && !p.isBroken);
+    const goal = currentGoal();
     let y = Math.round(height * 0.5);
     if (goal && goal.y > y - SHIELD_GOAL_GAP) y = Math.round(goal.y + SHIELD_GOAL_GAP);
     const maxY = height - 90;
@@ -569,6 +569,13 @@ function drawBoxShape(c, type, w, h, t, o = {}) {
 }
 
 // ===================== LAVA ASCENDENTE (cada 10 niveles) =====================
+// Meta del nivel actual: la última marcada como meta. (La plataforma donde empieza el nivel
+// fue la meta del nivel anterior y conserva la marca, así que no vale coger la primera.)
+function currentGoal() {
+    for (let i = platforms.length - 1; i >= 1; i--) if (platforms[i].isGoal && !platforms[i].isBroken) return platforms[i];
+    return null;
+}
+
 // --- NAVE NODRIZA ---
 // Fase especial (10 %, desde el nivel MOTHER_MIN_LEVEL): una nave el triple de grande que un dron vigila
 // la parte de arriba de la pantalla (aunque la caja suba, ella vuelve siempre arriba). Fija una zona con un
@@ -578,12 +585,15 @@ const MOTHER_CHANCE = 0.10;
 const MOTHER_MIN_LEVEL = 5;
 const MOTHER_W = 120, MOTHER_H = 60;    // el triple que un dron (40 x 20)
 const MOTHER_AIM_S = 4;                 // segundos que avisa el rayo fino antes del láser
-const MOTHER_ZONE_W = 110;              // ancho de la zona que barre el láser
-const MOTHER_BEAM_S = 0.6;              // duración visual del láser grande
+const MOTHER_COLS = 4;                  // la pantalla se parte en 4 columnas y dispara sobre una
+const MOTHER_BEAM_K = 1 / 3;            // el láser ocupa un tercio del ancho de la columna
+const MOTHER_DROP_S = 0.45;             // lo que tarda el láser en caer de la nave al fondo
+const MOTHER_BEAM_S = 0.8;              // duración total del láser (caída + se apaga)
 let motherLevel = false;
-const mother = { active: false, x: 0, y: 0, tx: 0, state: 'move', t: 0, zoneX: 0, rnd: Math.random, wait: 0 };
+const mother = { active: false, x: 0, y: 0, tx: 0, state: 'move', t: 0, zoneX: 0, col: -1, front: 0, rnd: Math.random, wait: 0 };
 const motherTopY = () => 92;            // altura fija (pantalla) bajo el marcador
-const motherZone = () => [mother.zoneX - MOTHER_ZONE_W / 2, mother.zoneX + MOTHER_ZONE_W / 2];
+const motherBeamW = () => (width / MOTHER_COLS) * MOTHER_BEAM_K;
+const motherZone = () => [mother.zoneX - motherBeamW() / 2, mother.zoneX + motherBeamW() / 2];
 const inMotherZone = (p) => { const [a, b] = motherZone(), pw = p.type === 'temp_full' ? width : p.w; return p.x < b && p.x + pw > a; };
 const motherCanHit = (p) => !p.isBroken && !p.isGoal && p.type !== 'shield' && p.y > mother.y && inMotherZone(p);
 
@@ -597,9 +607,13 @@ function setupMother(silent) {
     mother.tx = motherPickX();
     if (!silent) showFeedback('🛸 ¡NAVE NODRIZA!\nHuye de la zona marcada');
 }
+// Elige una de las 4 columnas (distinta de la anterior) y se coloca encima de su centro
 function motherPickX() {
-    const zx = MOTHER_ZONE_W / 2 + mother.rnd() * (width - MOTHER_ZONE_W);
-    return Math.max(0, Math.min(width - MOTHER_W, zx - MOTHER_W / 2));
+    let c = Math.floor(mother.rnd() * MOTHER_COLS);
+    if (c === mother.col) c = (c + 1 + Math.floor(mother.rnd() * (MOTHER_COLS - 1))) % MOTHER_COLS;
+    mother.col = c;
+    mother.zoneX = (c + 0.5) * (width / MOTHER_COLS);
+    return mother.zoneX - MOTHER_W / 2; // la nave puede asomar un poco por los lados
 }
 function updateMother(dt) {
     if (!mother.active || runEnded) return;
@@ -610,24 +624,32 @@ function updateMother(dt) {
         if (Math.abs(dx) > sp) mother.x += Math.sign(dx) * sp; else mother.x = mother.tx;
         if (mother.x === mother.tx && mother.wait <= 0) { // fija la zona: rayo fino de aviso
             mother.state = 'aim'; mother.t = 0;
-            mother.zoneX = mother.x + MOTHER_W / 2;
             sfx('ray');
         }
     } else if (mother.state === 'aim') {
         mother.t += dt;
         const k = Math.min(1, mother.t / MOTHER_AIM_S);
         platforms.forEach((p) => { p.rayT = motherCanHit(p) ? k : 0; });
-        if (mother.t >= MOTHER_AIM_S) { // ¡LÁSER!
-            platforms.forEach((p) => {
-                if (motherCanHit(p)) { p.isBroken = true; createExplosion(p.x + p.w / 2, p.y, 1.2); }
-                p.rayT = 0;
-            });
-            sfx('ray_break'); addShake(7); addFlash(0.18, '255,70,90');
-            mother.state = 'beam'; mother.t = 0;
+        if (mother.t >= MOTHER_AIM_S) { // ¡LÁSER! cae desde la nave hacia abajo
+            mother.state = 'beam'; mother.t = 0; mother.front = mother.y + MOTHER_H;
+            sfx('ray_break'); addShake(4);
         }
     } else if (mother.state === 'beam') {
         mother.t += dt;
-        if (mother.t >= MOTHER_BEAM_S) { mother.state = 'move'; mother.wait = 1.4 + mother.rnd() * 1.6; mother.tx = motherPickX(); }
+        const top = mother.y + MOTHER_H;
+        mother.front = top + (height - top) * Math.min(1, mother.t / MOTHER_DROP_S);
+        // destruye cada plataforma de la zona cuando el láser llega a ella
+        platforms.forEach((p) => {
+            if (p.rayT > 0 && !motherCanHit(p)) p.rayT = 0;
+            if (motherCanHit(p) && p.y <= mother.front) {
+                p.isBroken = true; p.rayT = 0;
+                createExplosion(p.x + p.w / 2, p.y, 1.1); addShake(3);
+            }
+        });
+        if (mother.t >= MOTHER_BEAM_S) {
+            platforms.forEach((p) => { p.rayT = 0; });
+            mother.state = 'move'; mother.wait = 1.4 + mother.rnd() * 1.6; mother.tx = motherPickX();
+        }
     }
 }
 function drawMother() {
@@ -649,13 +671,20 @@ function drawMother() {
         ctx.globalAlpha = 1; ctx.shadowBlur = 0;
         ctx.font = '700 15px "Chakra Petch", sans-serif'; ctx.textAlign = 'center'; ctx.fillStyle = '#fff';
         ctx.fillText(String(Math.ceil(MOTHER_AIM_S - mother.t)), x + w / 2, y + h + 20); // cuenta atrás
-    } else if (mother.state === 'beam') { // láser grande
-        const [a, b] = motherZone(), f = Math.max(0, 1 - mother.t / MOTHER_BEAM_S);
+    } else if (mother.state === 'beam') { // láser que cae desde la nave
+        const [a, b] = motherZone();
+        const fade = mother.t <= MOTHER_DROP_S ? 1 : Math.max(0, 1 - (mother.t - MOTHER_DROP_S) / (MOTHER_BEAM_S - MOTHER_DROP_S));
+        const f = fade, bottom = mother.front;
         const g = ctx.createLinearGradient(a, 0, b, 0);
         g.addColorStop(0, 'rgba(255,40,80,0)'); g.addColorStop(0.25, 'rgba(255,60,100,' + 0.75 * f + ')');
         g.addColorStop(0.5, 'rgba(255,240,250,' + f + ')'); g.addColorStop(0.75, 'rgba(255,60,100,' + 0.75 * f + ')'); g.addColorStop(1, 'rgba(255,40,80,0)');
         ctx.fillStyle = g; ctx.shadowBlur = 30; ctx.shadowColor = '#ff2a55';
-        ctx.fillRect(a, y + h - 8, b - a, height - (y + h - 8));
+        ctx.fillRect(a, y + h - 8, b - a, Math.max(0, bottom - (y + h - 8)));
+        // punta incandescente mientras cae
+        if (mother.t < MOTHER_DROP_S) {
+            ctx.fillStyle = 'rgba(255,245,250,0.95)';
+            ctx.beginPath(); ctx.ellipse(cx, bottom, (b - a) * 0.75, 7, 0, 0, Math.PI * 2); ctx.fill();
+        }
         ctx.shadowBlur = 0;
     }
     // casco
@@ -2836,6 +2865,7 @@ function drawTrail() {
 // mientras dure el salto (sin zoom). Se sigue la plataforma aunque desaparezca.
 const ORIGIN_BOTTOM_MARGIN = 34;   // hueco mínimo bajo la plataforma de origen
 const PLAYER_MIN_Y = 0.12;         // el jugador nunca sube por encima de este % de la pantalla
+let goalFollow = 'off';            // 'off' | 'armed' (ha sobrepasado la meta) | 'done' (ya no acompaña en esta caída)
 const GOAL_FOLLOW_Y = 0.6;         // al caer hacia una meta fuera de pantalla, la caja se mantiene a este % de altura
 let originY = null;
 
@@ -2919,16 +2949,21 @@ function updateCamera() {
         shiftWorld(diff);
     }
 
-    // La caja ha sobrepasado la meta y vuelve a caer: si la meta se quedó por debajo de la
-    // pantalla, la cámara acompaña la caída hasta que la meta vuelve a verse. Así, si la meta
-    // está justo debajo, la caja puede aterrizar en ella; si no, sigue cayendo y se pierde.
-    if (!player.onGround && player.vy > 0) {
-        const goal = platforms.find((p) => p.isGoal && !p.isBroken);
+    // Cámara de caída: SOLO si la caja ha sobrepasado la meta de este nivel. Mientras vuelve a caer,
+    // la cámara la acompaña hasta que la meta reaparece en la parte de abajo de la pantalla; ahí deja
+    // de acompañar (si la caja no cae sobre la meta, sigue cayendo y se pierde). En cualquier otra
+    // caída de la partida la cámara no se mueve.
+    const goal = currentGoal();
+    if (player.onGround || !goal) goalFollow = 'off';
+    else if (goalFollow === 'off' && player.y + player.h < goal.y - 4) goalFollow = 'armed'; // ha subido por encima de la meta
+    if (goalFollow === 'armed' && player.vy > 0) {
         const followY = height * GOAL_FOLLOW_Y;
-        if (goal && goal.y > player.y + player.h && player.y > followY) {
-            const goalLimit = height - ORIGIN_BOTTOM_MARGIN;
+        const goalLimit = height - ORIGIN_BOTTOM_MARGIN;
+        if (goal.y <= goalLimit) goalFollow = 'done';               // la meta ya se ve abajo: se deja de acompañar
+        else if (player.y > followY) {
             const up = Math.min(player.y - followY, goal.y - goalLimit);
             if (up > 0) shiftWorld(-up);
+            if (goal.y <= goalLimit + 0.5) goalFollow = 'done';
         }
     }
 }
