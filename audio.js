@@ -26,6 +26,10 @@
     let ctx = null, out = null, sfxBus = null, musicBus = null, revIn = null, noiseBuf = null;
     let musicWanted = false, timer = null, moodName = 'normal', step = 0, nextT = 0;
     const MUSIC_VOL = 0.42;
+    // Móvil básico (pocos núcleos o poca memoria): el audio se procesa a 32 kHz (en el altavoz de un
+    // móvil no se nota) con un búfer algo mayor y reverb más corta. El hilo de audio gasta ~la mitad.
+    const LOW_END = (navigator.hardwareConcurrency || 8) <= 4 || (navigator.deviceMemory || 8) <= 3;
+    const REVERB_S = LOW_END ? 1.4 : 2.1;
     const lastPlayed = {};
     const mtof = (m) => 440 * Math.pow(2, (m - 69) / 12);
     const rnd = (a, b) => a + Math.random() * (b - a);
@@ -43,7 +47,11 @@
         if (ctx) return ctx;
         const AC = window.AudioContext || window.webkitAudioContext;
         if (!AC) return null;
-        try { ctx = new AC(); } catch (e) { ctx = null; return null; }
+        try {
+            ctx = LOW_END ? new AC({ latencyHint: 'balanced', sampleRate: 32000 }) : new AC();
+        } catch (e) {
+            try { ctx = new AC(); } catch (e2) { ctx = null; return null; } // navegadores sin esas opciones
+        }
 
         // limitador final: nada satura aunque suenen muchas cosas a la vez
         const limiter = ctx.createDynamicsCompressor();
@@ -57,13 +65,17 @@
         out = ctx.createGain(); out.gain.value = 0.85; out.connect(hp);
 
         // reverb de sala
-        const conv = ctx.createConvolver(); conv.buffer = makeImpulse(2.1, 2.6);
+        const conv = ctx.createConvolver(); conv.buffer = makeImpulse(REVERB_S, 2.6);
         const revGain = ctx.createGain(); revGain.gain.value = 0.55;
         const revLp = ctx.createBiquadFilter(); revLp.type = 'lowpass'; revLp.frequency.value = 5200;
         revIn = ctx.createGain(); revIn.connect(conv); conv.connect(revLp); revLp.connect(revGain); revGain.connect(out);
 
         sfxBus = ctx.createGain(); sfxBus.gain.value = 0.62; sfxBus.connect(out);
-        musicBus = ctx.createGain(); musicBus.gain.value = 0; musicBus.connect(out);
+        // La música ya sale ecualizada y comprimida de la grabación: va directa a la salida y se ahorra
+        // el limitador y la EQ en tiempo real durante toda la partida (sonido idéntico).
+        musicBus = ctx.createGain(); musicBus.gain.value = 0;
+        const musicOut = ctx.createGain(); musicOut.gain.value = 1 / MUSIC_VOL; // el volumen ya viene aplicado en la grabación
+        musicBus.connect(musicOut); musicOut.connect(ctx.destination);
 
         noiseBuf = ctx.createBuffer(1, ctx.sampleRate * 2, ctx.sampleRate);
         const d = noiseBuf.getChannelData(0);
@@ -352,7 +364,14 @@
         const saved = { ctx, revIn, noiseBuf, musicBus, moodName };
         try {
             ctx = off;
-            const outO = off.createGain(); outO.gain.value = 1; outO.connect(off.destination);
+            // misma cadena que la salida en directo (EQ suave + limitador), aplicada ya en la grabación
+            const limO = off.createDynamicsCompressor();
+            limO.threshold.value = -10; limO.knee.value = 6; limO.ratio.value = 12; limO.attack.value = 0.003; limO.release.value = 0.18;
+            const hpO = off.createBiquadFilter(); hpO.type = 'highpass'; hpO.frequency.value = 32;
+            const shO = off.createBiquadFilter(); shO.type = 'highshelf'; shO.frequency.value = 9000; shO.gain.value = -3;
+            const masterO = off.createGain(); masterO.gain.value = MUSIC_VOL * 0.85; // mismo nivel que entraba al limitador en directo
+            masterO.connect(hpO); hpO.connect(shO); shO.connect(limO); limO.connect(off.destination);
+            const outO = off.createGain(); outO.gain.value = 1; outO.connect(masterO);
             const conv = off.createConvolver(); conv.buffer = makeImpulse(2.1, 2.6);
             const revGain = off.createGain(); revGain.gain.value = 0.55;
             const revLp = off.createBiquadFilter(); revLp.type = 'lowpass'; revLp.frequency.value = 5200;
