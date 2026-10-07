@@ -107,7 +107,7 @@ function customLevelData() {
 }
 function levelPlatformCount() {
     if (gameMode === 'custom') return Math.max(1, customLevelData().items.filter(i => i.k === 'plat').length);
-    return 5 + Math.floor(level / 2);
+    return Math.min(MAX_PLATFORMS_PER_LEVEL, 5 + Math.floor(level / 2));
 }
 function rollEnvironment(allowGravity) {
     seedLevelRng();
@@ -123,10 +123,10 @@ function rollEnvironment(allowGravity) {
     windForce = 0; gravityFactor = 1.0; darkLevel = false; motherLevel = false;
     // Solo UN tipo de fase especial por nivel. Prioridad: lava > nave nodriza > niebla > viento > gravedad baja
     if (isLavaLevel()) return;                                                       // lava (cada 10 niveles)
-    if (specialModes() && level >= MOTHER_MIN_LEVEL && rMother < MOTHER_CHANCE) motherLevel = true; // 10 %
-    else if (level >= 2 && rDark < DARK_CHANCE) darkLevel = true;                    // niebla 10 %
+    if (specialModes() && level >= UNLOCK.mother && rMother < MOTHER_CHANCE) motherLevel = true; // 10 %
+    else if (level >= UNLOCK.dark && rDark < DARK_CHANCE) darkLevel = true;          // niebla 10 %
     else if (wind) windForce = wind;                                                 // viento (nivel 12+)
-    else if (allowGravity && level >= 30 && rGrav < 0.3) gravityFactor = 0.4;        // gravedad baja (modo Caos)
+    else if (allowGravity && level >= UNLOCK.lowGrav && rGrav < 0.3) gravityFactor = 0.4; // gravedad baja (modo Caos)
 }
 function buildCustomLevel() {
     const d = customLevelData();
@@ -231,11 +231,11 @@ const DARK_CHANCE = 0.10;   // probabilidad de que el siguiente nivel sea de nie
 const DARK_RADIUS = 105;    // radio (px) que se ilumina alrededor de la caja
 let darkLevel = false;      // nivel oscuro: solo se ve un radio reducido alrededor de la caja
 
-// Viento (nivel >= 12): en cada nivel hay un 20 % de probabilidad de que sople.
+// Viento (desde UNLOCK.wind): en cada nivel hay un 20 % de probabilidad de que sople.
 // Dirección aleatoria e intensidad mínima para que siempre se note
 const WIND_CHANCE = 0.2;
 function rollWind(R = Math.random) {
-    if (level < 12) return 0;
+    if (level < UNLOCK.wind) return 0;
     if (R() >= WIND_CHANCE) return 0;
     return (R() < 0.5 ? -1 : 1) * (0.025 + R() * 0.055);
 }
@@ -315,16 +315,62 @@ const effWind = () => windForce * boxCfg().wind;          // viento que de verda
 const effGrav = () => player.gravity * boxCfg().grav;     // gravedad propia de esta caja
 const armBomb = () => { bombFuse = BOMB_FUSE_SECONDS; };
 
+// ===================== CURVA DE DIFICULTAD =====================
+// Una mecánica nueva cada 2-3 niveles, nunca dos en el mismo nivel. Todo lo que hace el juego
+// más difícil se decide aquí, para poder ajustar la curva sin buscar números por el código.
+const UNLOCK = {
+    moving: 4,       // plataformas móviles
+    spring: 6,       // resortes
+    vanishing: 7,    // una de cada 10 plataformas se desvanece al pisarla
+    sling: 8,        // tirachinas
+    lava: 10,        // primera lava (luego cada 10 niveles)
+    ice: 12,
+    sticky: 14,
+    drones: 16,
+    wind: 18,
+    dark: 20,        // niebla
+    mini_sticky: 22,
+    mother: 25,      // nave nodriza
+    fragile: 28,
+    flash: 32,       // intermitentes
+    lowGrav: 30,     // gravedad baja (solo modo Caos)
+    bomb: 10,        // la caja bomba no sale al azar antes de este nivel
+};
+// Peso de cada plataforma especial: entra con un 40 % de su peso máximo y crece hasta el
+// máximo en 8 niveles (sin picos al desbloquearse). El resto de plataformas son normales (≥ 43 %).
+const PLAT_WEIGHTS = { moving: 0.15, spring: 0.08, ice: 0.07, sticky: 0.07, mini_sticky: 0.06, fragile: 0.08, flash: 0.06 };
+const RAMP_LEVELS = 8;
+function rampWeight(key, max) {
+    const from = UNLOCK[key];
+    if (level < from) return 0;
+    return max * (0.4 + 0.6 * Math.min(1, (level - from) / RAMP_LEVELS));
+}
+// Progreso del reto de precisión: 0 en el nivel 1 → 1 en el nivel PRECISION_TOP (sigue apretando todo ese tramo)
+const PRECISION_TOP = 36;
+const precisionProgress = () => Math.min(1, Math.max(0, level - 1) / (PRECISION_TOP - 1));
+const MAX_PLATFORMS_PER_LEVEL = 13;   // los niveles dejan de alargarse a partir del nivel 16
+
 // ===================== CAMBIO DE CAJA, COHETE-BOMBA, BOTE DE GOMA =====================
 const BOX_KEYS = Object.keys(BOX_TYPES);
 const boxLabel = (k) => (k === 'mystery' ? '❓ Misteriosa' : BOX_TYPES[k].name);
+// Peso de cada caja en el sorteo: sin bomba al principio; la pesada sale más cuando sopla viento
+// (y casi nada antes de que exista el viento, porque ahí no sirve de nada)
+function boxWeight(k) {
+    if (k === 'bomb') return level < UNLOCK.bomb ? 0 : 1;
+    if (k === 'heavy') return windForce !== 0 ? 3 : (level >= UNLOCK.wind ? 1 : 0.35);
+    return 1;
+}
+function pickWeighted(pool) {
+    const total = pool.reduce((a, k) => a + boxWeight(k), 0);
+    let r = Math.random() * total;
+    for (const k of pool) { r -= boxWeight(k); if (r < 0) return k; }
+    return pool[pool.length - 1];
+}
 function rollRandomBox(exclude) {
-    const pool = BOX_KEYS.filter((k) => k !== exclude);
-    return pool[Math.floor(Math.random() * pool.length)];
+    return pickWeighted(BOX_KEYS.filter((k) => k !== exclude));
 }
 function pickMysteryBehavior() {
-    const pool = BOX_KEYS.filter((k) => k !== 'mystery');
-    mysteryAs = pool[Math.floor(Math.random() * pool.length)];
+    mysteryAs = pickWeighted(BOX_KEYS.filter((k) => k !== 'mystery'));
 }
 function setActiveBox(key) {
     boxType = key;
@@ -651,7 +697,7 @@ function currentGoal() {
 // rayo fino y, a los 4 s, un láser grande destruye todas las plataformas de esa zona (menos la meta y el
 // escudo). No mata: solo elimina plataformas. En esta fase no hay drones ni plataformas que desaparecen.
 const MOTHER_CHANCE = 0.10;
-const MOTHER_MIN_LEVEL = 5;
+const MOTHER_MIN_LEVEL = 25; // (ver UNLOCK.mother)
 const MOTHER_W = 120, MOTHER_H = 60;    // el triple que un dron (40 x 20)
 const MOTHER_AIM_S = 4;                 // segundos que avisa el rayo fino antes del láser
 const MOTHER_COLS = 4;                  // la pantalla se parte en 4 columnas y dispara sobre una
@@ -942,14 +988,15 @@ const precisionSystem = {
             difficultyFactor = Math.max(1, distY / 150);
         }
 
-        // Zona verde dinámica (con margen extra en los primeros niveles para una curva de entrada más suave)
-        const levelEase = Math.max(0, (10 - level) * 0.035);
-        this.targetArea.greenScale = Math.min(0.9, Math.max(0.05, 0.45 - (difficultyFactor * 0.3) + levelEase));
+        // Reto de precisión: se endurece poco a poco hasta el nivel PRECISION_TOP (antes tocaba techo en el 11).
+        // Los saltos más largos (difficultyFactor > 1) son algo más exigentes.
+        const pp = precisionProgress(), extra = difficultyFactor - 1;
+        this.targetArea.greenScale = Math.min(0.9, Math.max(0.06, 0.42 - 0.29 * pp - extra * 0.2));
 
-        const randomVariance = (Math.random() - 0.5) * 1.5;
-        this.ball.speed = (5 + (Math.min(level - 1, 20) * 0.8) + (difficultyFactor * 2.5)) + randomVariance;
-        if (this.ball.speed < 4) this.ball.speed = 4;
-        if (this.ball.speed > 16) this.ball.speed = 16;
+        const randomVariance = (Math.random() - 0.5) * 1.2;
+        this.ball.speed = 7 + 9 * pp + extra * 2 + randomVariance;
+        if (this.ball.speed < 5) this.ball.speed = 5;
+        if (this.ball.speed > 16.5) this.ball.speed = 16.5;
     },
 
     update() {
@@ -1660,19 +1707,20 @@ function spawnNextPlatform(forceGoal = false) {
     // DETERMINAR TIPO DE PLATAFORMA
     let type = 'normal';
     if (!forceGoal) {
-        if (level >= 6 && totalPlatformGlobalCount % 10 === 0) type = 'vanishing';
-        else if (level >= 27 && rType < 0.06) type = 'flash';
-        else if (level >= 22 && rType < 0.14) type = 'fragile';
-        else if (level >= 16 && rType < 0.22) type = 'mini_sticky';
-        else if (level >= 12 && rType < 0.32) type = (rIce > 0.5 ? 'ice' : 'sticky');
-        else if (level >= 6 && rType < 0.40) type = 'spring';
-        else if (level >= 8 && rType < 0.55) type = 'moving';
+        if (level >= UNLOCK.vanishing && totalPlatformGlobalCount % 10 === 0) type = 'vanishing';
+        else { // sorteo por pesos: cada tipo crece poco a poco desde que se desbloquea
+            let acc = 0;
+            for (const k in PLAT_WEIGHTS) {
+                acc += rampWeight(k, PLAT_WEIGHTS[k]);
+                if (rType < acc) { type = k; break; }
+            }
+        }
         // Fase de nave nodriza: sin plataformas que desaparecen
         if (motherLevel && (type === 'vanishing' || type === 'fragile' || type === 'flash')) type = 'normal';
     }
 
     // Plataforma tirachinas (nivel 10+): solo sustituye a una plataforma normal
-    if (!forceGoal && type === 'normal' && level >= 10 && rSling < 0.1) type = 'sling';
+    if (!forceGoal && type === 'normal' && rSling < rampWeight('sling', 0.1)) type = 'sling';
 
     const platform = new Platform(nextX, nextY, nextW, 20, forceGoal, type, rDirX > 0.5, rDirY > 0.5);
     platforms.push(platform);
@@ -1682,7 +1730,7 @@ function spawnNextPlatform(forceGoal = false) {
     if (!forceGoal && type !== 'flash' && rChest < CHEST_CHANCE) chests.push(new Chest(platform, 0.12 + rChestT * 0.76));
 
     // Obstáculos (Nivel 15+)
-    if (level >= 15 && rObs < 0.3 && !motherLevel) { // (sin drones en la fase de nave nodriza)
+    if (rObs < rampWeight('drones', 0.3) && !motherLevel) { // drones: 12 % → 30 %; nunca en la fase de nave nodriza
         const axis = rObsSide > 0.5 ? 'h' : 'v', dir = rObsY > 0.5 ? 1 : -1;
         const seed = Math.floor((rObsY * 0.5 + rObsSide * 0.37 + rObs) * 4294967296) >>> 0;
         if (axis === 'h') { // patrulla todo el ancho, sobrevolando la nueva plataforma
@@ -1722,13 +1770,15 @@ function nextLevel() {
     const wasBombBox = boxKind() === 'bomb';
     const played = level - runFirstLevel;
     let boxMsg = '';
+
+    // Configuración ambiental según nivel (viento / gravedad; en fases creadas viene del editor)
+    rollEnvironment(true);
+
+    // (después del ambiente: así la caja pesada puede salir más en los niveles con viento)
     if (!wasBombBox && played >= BOX_SWAP_EVERY && played % BOX_SWAP_EVERY === 0) {
         setActiveBox(rollRandomBox(boxType));
         boxMsg = '\n📦 Nueva caja: ' + boxLabel(boxType);
     }
-
-    // Configuración ambiental según nivel (viento / gravedad; en fases creadas viene del editor)
-    rollEnvironment(true);
 
     platformsInLevel = levelPlatformCount();
     platformsReached = 0;
@@ -1843,7 +1893,7 @@ function computeJump(precision) {
     }
     const distY = player.y - target.y + player.h;
 
-    const targetMultiplier = rocket ? 1.08 : ((tier === "PERFECT") ? 1.08 : (tier === "GOOD" ? 1.45 : (Math.random() > 0.5 ? 2.0 : 0.4)));
+    const targetMultiplier = rocket ? 1.08 : ((tier === "PERFECT") ? 1.08 : (tier === "GOOD" ? 1.45 : 0.4));
     const g = effGrav(); // gravedad propia de la caja (la ligera cae más despacio)
     const vy = -Math.sqrt(2 * g * distY) * targetMultiplier;
 
