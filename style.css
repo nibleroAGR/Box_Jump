@@ -1406,3 +1406,25 @@ button:disabled { box-shadow: none; }
 .screen:focus-within .glass-card { animation: none !important; transform: none !important; }
 body.bj-typing .screen { backdrop-filter: none !important; -webkit-backdrop-filter: none !important; }
 body.bj-typing .glass-card { animation: none !important; transform: none !important; }
+
+/* ---------- Invitado / cuenta vinculada ---------- */
+body.bj-guest .account-only, body.bj-guest .needs-account { display: none !important; }
+body:not(.bj-guest) .guest-only { display: none !important; }
+#guest-banner { margin: 0.6rem 0 0.4rem; padding: 0.7rem 0.8rem; border-radius: 14px; font-size: 0.78rem; line-height: 1.35;
+    background: rgba(62, 240, 255, 0.08); border: 1px solid rgba(62, 240, 255, 0.3); color: #dfe8ff; }
+#guest-banner .google-btn { margin-top: 0.5rem; }
+.small-google { padding: 0.5rem 0.9rem; font-size: 0.78rem; width: 100%; }
+#link-modal, #data-modal, #delete-modal { z-index: 290; background: rgba(5, 11, 24, 0.95); }
+#link-modal .glass-card, #delete-modal .glass-card { max-width: 360px; width: 92%; }
+.data-card { max-width: 420px; width: 94%; max-height: 86vh; overflow-y: auto; text-align: left; }
+.data-card h2 { text-align: center; }
+.data-card .help-item { margin: 0.55rem 0; font-size: 0.82rem; line-height: 1.4; }
+.data-card .help-item strong { display: block; color: #3ef0ff; margin-bottom: 0.15rem; }
+#delete-modal .settings-input { width: 100%; box-sizing: border-box; font-size: 16px; margin: 0.3rem 0 0.4rem; text-align: center; letter-spacing: 0.2em; }
+#delete-go-btn:disabled { opacity: 0.4; }
+.settings-link-btn { display: block; text-align: center; padding: 0.65rem 1rem; margin-top: 0.4rem; border-radius: 12px;
+    border: 1px solid var(--line, rgba(255,255,255,0.15)); color: #fff; text-decoration: none; font-size: 0.85rem; }
+.danger-btn#delete-account-btn { margin-top: 0.6rem; }
+/* ---------- Tutoriales (mismo cuadro que "nueva caja") ---------- */
+.tip-icon { font-size: 52px; line-height: 1; margin: 0.2rem auto 0.4rem; text-align: center; }
+body.bj-guest #add-friend-row, body.bj-guest #my-friend-code { display: none !important; }

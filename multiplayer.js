@@ -79,6 +79,7 @@
 
     function openLobby() {
         if (!FB() || !FB().isSignedIn()) { toast('Inicia sesión con Google primero'); return; }
+        if (FB().requireAccount && FB().requireAccount('jugar multijugador')) return;
         show($('mp-screen'));
         setStatus('');
         inLobby = true;
@@ -438,7 +439,7 @@
     on('mp-result-close', () => hide($('mp-result-screen')));
 
     window.addEventListener('bj-auth-changed', (e) => {
-        if (e.detail && e.detail.signedIn) listenInvites();
+        if (e.detail && e.detail.signedIn && !e.detail.guest) listenInvites();
         else { stopInvites(); cancelOutgoing(); if (inLobby) closeLobby(); }
     });
     // Al cerrar la página se sale de la sala y se cancela lo pendiente

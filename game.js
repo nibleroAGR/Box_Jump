@@ -1621,6 +1621,7 @@ function openChest(c) {
     createExplosion(c.x + c.w / 2, c.y, 1.0);
     showFeedback("🎁 ¡COFRE ABIERTO!");
     sfx('chest');
+    showTip('items'); // primer cofre: explicación de los objetos
     const now = performance.now();
     const base = reels.length ? reels[reels.length - 1].stopAt : now + 500;
     for (let i = 0; i < free; i++) {
@@ -1688,6 +1689,7 @@ function initPlatforms(startLevel = 1) {
     setupLava(false);
     populateLevel();
     setupMother(false);
+    phaseTips();
 }
 
 function spawnNextPlatform(forceGoal = false) {
@@ -1812,6 +1814,7 @@ function nextLevel() {
 
     populateLevel();
     setupMother(true);
+    phaseTips();
 }
 
 // --- UTILS ---
@@ -3036,6 +3039,7 @@ function update(dtMs = STEP_MS) {
     updateBombBox(dtMs / 1000);
     updateLava(dtMs / 1000);
     updateMother(dtMs / 1000);
+    scanTips();
 
     // Actualizar entidades
     obstacles = obstacles.filter(obs => obs.update());
@@ -3207,11 +3211,7 @@ function gameLoop() {
     requestAnimationFrame(gameLoop);
 }
 function startGame(continueGame = false, cfg = null) {
-    // Hay que iniciar sesión con Google antes de poder jugar
-    if (window.BJFirebase && !window.BJFirebase.isSignedIn()) {
-        window.BJFirebase.promptSignIn();
-        return;
-    }
+    // Ya no hace falta iniciar sesión: se juega como invitado (y se vincula Google cuando se quiera)
     modeCfg = cfg || null;
     gameMode = cfg ? cfg.type : 'normal';
     runEnded = false;
@@ -3644,38 +3644,108 @@ window.BJGame = {
 // --- Cuadro "NUEVA CAJA": primera vez que aparece una caja (pausa la partida mientras se lee) ---
 let boxIntroQueue = [], boxIntroOpen = false, boxIntroWasActive = false, boxIntroTimer = null;
 let boxPickerRefresh = null;
-function openBoxIntro(key) {
+// Cola de cuadros informativos: { box: clave } (caja nueva) o { tip: clave } (tutorial)
+function openIntro(item) {
     const m = document.getElementById('box-intro-modal');
-    const cv = document.getElementById('box-intro-canvas');
-    document.getElementById('box-intro-name').textContent = BOX_TYPES[key].name;
-    document.getElementById('box-intro-desc').textContent = BOX_TYPES[key].desc;
-    const c = cv.getContext('2d');
-    const paint = () => {
-        c.clearRect(0, 0, cv.width, cv.height);
-        c.save(); c.translate(cv.width / 2, cv.height / 2);
-        drawBoxShape(c, key, 44, 44, performance.now(), { fuse: 99 });
-        c.restore();
-    };
-    clearInterval(boxIntroTimer); paint(); boxIntroTimer = setInterval(paint, 60);
+    const cv = document.getElementById('box-intro-canvas'), icon = document.getElementById('tip-icon');
+    const tag = document.getElementById('box-intro-tag'), name = document.getElementById('box-intro-name');
+    const desc = document.getElementById('box-intro-desc');
+    clearInterval(boxIntroTimer); boxIntroTimer = null;
+    desc.style.whiteSpace = 'pre-line';
+    if (item.tip) {
+        const t = TIPS[item.tip];
+        tag.textContent = '💡 ¡NOVEDAD!';
+        cv.classList.add('hidden'); icon.classList.remove('hidden');
+        icon.textContent = t.icon; name.textContent = t.title; desc.textContent = t.text;
+    } else {
+        const key = item.box;
+        tag.textContent = '📦 ¡NUEVA CAJA DESBLOQUEADA!';
+        cv.classList.remove('hidden'); icon.classList.add('hidden');
+        name.textContent = BOX_TYPES[key].name;
+        desc.textContent = BOX_TYPES[key].desc;
+        const c = cv.getContext('2d');
+        const paint = () => {
+            c.clearRect(0, 0, cv.width, cv.height);
+            c.save(); c.translate(cv.width / 2, cv.height / 2);
+            drawBoxShape(c, key, 44, 44, performance.now(), { fuse: 99 });
+            c.restore();
+        };
+        paint(); boxIntroTimer = setInterval(paint, 60);
+    }
     m.classList.remove('hidden');
 }
-function showBoxIntro(key) {
+function showIntroItem(item) {
     const m = document.getElementById('box-intro-modal');
     if (!m) return;
-    if (boxIntroOpen) { boxIntroQueue.push(key); return; }
+    if (boxIntroOpen) { boxIntroQueue.push(item); return; }
     boxIntroOpen = true; boxIntroWasActive = gameActive; gameActive = false;
     sfx('unlock');
     aim.cancel(); cancelSling();
-    openBoxIntro(key);
+    openIntro(item);
 }
+function showBoxIntro(key) { showIntroItem({ box: key }); }
 function closeBoxIntro() {
-    if (boxIntroQueue.length) { openBoxIntro(boxIntroQueue.shift()); return; }
+    if (boxIntroQueue.length) { openIntro(boxIntroQueue.shift()); return; }
     clearInterval(boxIntroTimer); boxIntroTimer = null;
     document.getElementById('box-intro-modal').classList.add('hidden');
     boxIntroOpen = false;
     if (boxIntroWasActive && !runEnded) gameActive = true;
     lastFrameT = performance.now(); stepAcc = 0;
 }
+
+// ===================== TUTORIALES (la primera vez que aparece cada cosa) =====================
+const TIPS = {
+    // fases
+    lava: { icon: '🌋', title: 'Nivel de lava', text: 'Cada ' + LAVA_RISE_EVERY + ' segundos la lava sube hasta un poco por encima de la siguiente plataforma.\nNo te entretengas: si te alcanza, pierdes.' },
+    wind: { icon: '💨', title: 'Fase de viento', text: 'El viento empuja la caja en el aire.\nCuando aciertes en la barra de precisión, una aguja barre un arco: vuelve a tocar para fijar el ángulo. La línea punteada te enseña dónde caerás.\nLa caja pesada ignora el viento.' },
+    dark: { icon: '🌫️', title: 'Niebla', text: 'Solo ves un pequeño círculo alrededor de la caja.\nLas plataformas siguen ahí aunque no las veas: confía en tu precisión.' },
+    mother: { icon: '🛸', title: 'Nave nodriza', text: 'Arriba vigila una nave enorme. Marca una franja con un rayo fino y una cuenta atrás.\nA los 4 segundos su láser destruye las plataformas de esa franja: ¡sal de ahí!\nNo te hace daño a ti, solo a las plataformas.' },
+    lowGrav: { icon: '🪐', title: 'Gravedad baja', text: 'Todo cae más despacio: los saltos son más altos y largos.' },
+    // plataformas y obstáculos
+    moving: { icon: '↔️', title: 'Plataforma móvil', text: 'Se mueve de lado a lado y se para un momento en los bordes.\nEl salto apunta a donde estará cuando llegues.' },
+    spring: { icon: '🌀', title: 'Resorte', text: 'Al caer encima sales disparado hacia arriba sin tener que acertar la precisión.' },
+    vanishing: { icon: '✨', title: 'Plataforma que se desvanece', text: 'Al pisarla empieza a desaparecer: tienes 5 segundos para saltar.' },
+    sling: { icon: '🏹', title: 'Tirachinas', text: 'Al aterrizar, arrastra el dedo hacia abajo para tensar la goma, apunta a la siguiente plataforma y suelta.\nCuanto más tiras, más fuerte sale.' },
+    ice: { icon: '🧊', title: 'Hielo', text: 'Resbala: la caja se desliza un poco al caer. Salta antes de llegar al borde.' },
+    sticky: { icon: '🟢', title: 'Pegajosa', text: 'La caja se queda pegada donde cae, sin resbalar.' },
+    mini_sticky: { icon: '🟩', title: 'Mini pegajosa', text: 'Como la pegajosa, pero mucho más estrecha: hay que afinar.' },
+    fragile: { icon: '🪨', title: 'Plataforma frágil', text: 'Se rompe muy poco después de pisarla. ¡Salta rápido!' },
+    flash: { icon: '💡', title: 'Plataforma intermitente', text: 'Está 3 segundos encendida y 3 apagada. Apagada se atraviesa.\nParpadea justo antes de cambiar: aprovecha el aviso.' },
+    drones: { icon: '🤖', title: 'Drones', text: 'Patrullan y a veces disparan un rayo que destruye la plataforma de debajo en 5 segundos.\nNo te hacen daño: si caes encima de uno lo destruyes y rebotas a la siguiente plataforma.' },
+    shield: { icon: '🛡️', title: 'Escudo', text: 'Cógelo al pasar: si caes, se convierte en una plataforma que te salva una vez.' },
+    rocket: { icon: '🚀', title: 'Cohete', text: 'Cógelo al pasar: tus próximos ' + ROCKET_JUMPS + ' saltos se saltan una plataforma y van a la siguiente segura.' },
+    // cofres
+    items: { icon: '🎁', title: '¡Tu primer cofre!', text: 'Rellena tus huecos libres del inventario (arriba). Toca un objeto para usarlo:\n⏱️ Reloj: la bola va a la mitad de velocidad 10 s.\n🏗️ Plataforma: crea un puente de lado a lado bajo tus pies.\n⚡ Power: zona verde x5 durante 5 tiros.\n💣 Bomba: pausa y eliges una plataforma para explotarla.' },
+};
+let tipsSeen = [];
+try { tipsSeen = JSON.parse(localStorage.getItem('boxjump_tips_seen') || '[]') || []; } catch (e) { tipsSeen = []; }
+function showTip(key) {
+    if (!TIPS[key] || tipsSeen.includes(key) || gameMode === 'race') return; // en carrera no se pausa
+    tipsSeen.push(key);
+    try { localStorage.setItem('boxjump_tips_seen', JSON.stringify(tipsSeen)); } catch (e) { /* no disponible */ }
+    showIntroItem({ tip: key });
+}
+// Al empezar un nivel: tutorial del tipo de fase
+function phaseTips() {
+    if (lava.active) showTip('lava');
+    if (motherLevel) showTip('mother');
+    if (darkLevel) showTip('dark');
+    if (windForce !== 0) showTip('wind');
+    if (gravityFactor < 1) showTip('lowGrav');
+}
+// Durante el juego: la primera vez que entra en pantalla cada plataforma especial, un dron o un power-up
+let tipScanT = 0;
+const TIP_PLATS = ['moving', 'spring', 'vanishing', 'sling', 'ice', 'sticky', 'mini_sticky', 'fragile', 'flash'];
+function scanTips() {
+    if (++tipScanT % 15) return; // 4 veces por segundo basta
+    const inView = (y) => y > 60 && y < height - 40;
+    for (const p of platforms) {
+        if (!p.isBroken && !p.isGoal && TIP_PLATS.includes(p.type) && inView(p.y) && !tipsSeen.includes(p.type)) { showTip(p.type); return; }
+    }
+    if (obstacles.some((o) => o.hover && inView(o.y)) && !tipsSeen.includes('drones')) { showTip('drones'); return; }
+    for (const pu of powerups) if (inView(pu.y) && !tipsSeen.includes(pu.type)) { showTip(pu.type); return; }
+}
+
 (function () {
     const ok = document.getElementById('box-intro-ok');
     if (ok) ok.addEventListener('click', closeBoxIntro);

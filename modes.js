@@ -688,6 +688,7 @@
 
     async function publish() {
         const d = ED.d, name = (d.name || '').trim();
+        if (FB().requireAccount && FB().requireAccount('publicar fases en la comunidad')) return;
         if (!isVerified(d)) { toast('Primero tienes que verificar la fase'); return; }
         if (name.length < 3 || name.length > 30) { toast('El nombre debe tener entre 3 y 30 caracteres'); return; }
         $('ed-publish').disabled = true;

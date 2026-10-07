@@ -101,6 +101,9 @@
     dom.profileAvatar.onerror = () => { dom.profileAvatar.style.visibility = 'hidden'; };
 
     let currentUser = null;
+    let isGuest = false;          // sesión anónima de Firebase (juega sin vincular Google)
+    let anonInFlight = false;
+    let pendingMerge = null;      // progreso del invitado que se suma a una cuenta de Google ya existente
 
     function avatarFor(name) {
         const letter = ((name || 'J').trim()[0] || 'J').toUpperCase().replace(/[<>&"']/g, 'J');
@@ -117,7 +120,8 @@
         'auth/network-request-failed': 'Error de red. Comprueba tu conexión.',
         'auth/too-many-requests': 'Demasiados intentos. Espera un momento e inténtalo de nuevo.',
         'auth/user-disabled': 'Esta cuenta ha sido deshabilitada.',
-        'auth/operation-not-allowed': 'El acceso con Google no está activado en Firebase.',
+        'auth/operation-not-allowed': 'Ese tipo de acceso no está activado en Firebase (Authentication → Sign-in method).',
+        'auth/requires-recent-login': 'Por seguridad, vuelve a confirmar tu cuenta de Google e inténtalo de nuevo.',
         'auth/web-storage-unsupported': 'Tu navegador bloquea el almacenamiento. Abre el juego en Chrome o Safari.',
     };
     function showAuthError(err, isInfo) {
@@ -191,9 +195,34 @@
     // ---------------------------------------------------------------
     // 4) Perfil del jugador en Firestore
     // ---------------------------------------------------------------
+    // Nombre de invitado: "Invitado" + 5 cifras al azar (una sola consulta, no un bucle)
+    async function uniqueGuestName() {
+        for (let i = 0; i < 4; i++) {
+            const name = 'Invitado' + Math.floor(10000 + Math.random() * 90000);
+            try { const q = await users().where('username', '==', name).limit(1).get(); if (q.empty) return name; }
+            catch (e) { return name; }
+        }
+        return 'Invitado' + Date.now().toString().slice(-7);
+    }
+
     async function loadOrCreateProfile(user) {
         const ref = users().doc(user.uid);
         const snap = await ref.get();
+
+        if (!snap.exists && user.isAnonymous) { // invitado: perfil propio, fuera de los rankings hasta vincular
+            const username = await uniqueGuestName();
+            const profile = {
+                guest: true, displayName: username, username,
+                friendCode: username, friendCodeLower: username.toLowerCase(), friendCodeCustom: false,
+                photoURL: '', bestLevel: 1, bestHeight: 0, bestRank: 0, friends: [], savedGame: null,
+                checkpointFromRank: true, checkpointFromRank2: true,
+                createdAt: firebase.firestore.FieldValue.serverTimestamp(),
+                updatedAt: firebase.firestore.FieldValue.serverTimestamp(),
+            };
+            await ref.set(profile);
+            return profile;
+        }
+        if (snap.exists && user.isAnonymous) return snap.data();
 
         if (!snap.exists) {
             const emailName = (user.email || '').split('@')[0];
@@ -328,18 +357,17 @@
             const ref = users().doc(currentUser.uid);
             const snap = await ref.get();
             const data = snap.exists ? snap.data() : {};
-            const oldRank = typeof data.bestRank === 'number'
-                ? data.bestRank
-                : (data.bestLevel || 1) * RANK_BASE + (data.bestHeight || 0);
+            const oldRank = (data.bestLevel || 1) * RANK_BASE + (data.bestHeight || 0);
             const h = Math.max(0, Math.min(RANK_BASE - 1, Math.round(height || 0)));
             const newRank = level * RANK_BASE + h;
             if (newRank > oldRank) {
-                await ref.update({
-                    bestLevel: level, bestHeight: h, bestRank: newRank,
-                    displayName: currentUser.displayName || 'Jugador',
-                    photoURL: currentUser.photoURL || '',
+                const patch = {
+                    bestLevel: level, bestHeight: h,
+                    bestRank: isGuest ? 0 : newRank, // el invitado guarda su marca, pero no aparece en el ranking
                     updatedAt: firebase.firestore.FieldValue.serverTimestamp(),
-                });
+                };
+                if (!isGuest) { patch.displayName = currentUser.displayName || 'Jugador'; patch.photoURL = currentUser.photoURL || ''; }
+                await ref.update(patch);
             }
         } catch (err) {
             console.error('No se pudo guardar la marca:', err);
@@ -375,7 +403,7 @@
     async function fetchGlobalTop(n) {
         // Campo único (bestRank): no necesita índice compuesto
         const snap = await users().orderBy('bestRank', 'desc').limit(n).get();
-        return snap.docs.map((d) => ({ uid: d.id, ...d.data() }));
+        return snap.docs.map((d) => ({ uid: d.id, ...d.data() })).filter((u) => !u.guest); // invitados fuera
     }
 
     async function fetchMultiTop(n) {
@@ -418,6 +446,7 @@
     async function addFriendByCode(code) {
         const clean = (code || '').trim();
         if (!currentUser) return { ok: false, msg: 'Inicia sesión primero' };
+        if (isGuest) { requireAccount('tener amigos'); return { ok: false, msg: 'Vincula tu cuenta de Google para tener amigos' }; }
         if (!clean) return { ok: false, msg: 'Escribe el código de tu amigo' };
         const me = currentUser.uid;
         try {
@@ -669,6 +698,7 @@
         if (dom.rankingTitle) dom.rankingTitle.textContent = activeRankingScope === 'multi' ? '⚔️ MULTIJUGADOR'
             : (activeRankingScope === 'daily' ? '📅 FASE DIARIA · HOY' : '🏆 CLASIFICACIÓN GENERAL');
         dom.rankingModal.classList.remove('hidden');
+        if (isGuest) toast('👤 Juegas como invitado: vincula tu cuenta de Google para aparecer en el ranking', 4200);
         window.__bjOpenRanking && window.__bjOpenRanking();
         refreshRankingView();
     }
@@ -709,7 +739,13 @@
     }
 
     // Si volvemos de un signInWithRedirect, recogemos aquí el resultado.
-    auth.getRedirectResult().catch((err) => {
+    auth.getRedirectResult().then((res) => {
+        if (res && res.user && res.operationType === 'link') finishLink(res.user, res.additionalUserInfo).catch((e) => console.error(e));
+    }).catch((err) => {
+        if ((err.code === 'auth/credential-already-in-use' || err.code === 'auth/email-already-in-use') && err.credential) {
+            switchToExistingAccount(err.credential).catch((e) => console.error(e));
+            return;
+        }
         console.error('Error al completar el login por redirect:', err);
         showAuthError(err);
     });
@@ -758,8 +794,25 @@
     // ---------------------------------------------------------------
     // 7) Reacción a cambios de sesión: actualiza la UI y avisa a game.js
     // ---------------------------------------------------------------
-    auth.onAuthStateChanged(async (user) => {
+    // Sin sesión: se entra automáticamente como invitado (Firebase Auth anónimo)
+    async function startGuest() {
+        if (anonInFlight || auth.currentUser) return;
+        anonInFlight = true;
+        if ($('auth-hint')) $('auth-hint').innerText = 'Preparando tu partida…';
+        try { await auth.signInAnonymously(); }
+        catch (err) {
+            console.error('No se pudo entrar como invitado:', err);
+            if ($('auth-hint')) $('auth-hint').innerText = 'No se pudo preparar la partida de invitado. Puedes entrar con Google:';
+            showAuthError(err);
+        } finally { anonInFlight = false; }
+    }
+
+    auth.onAuthStateChanged((user) => handleUser(user));
+
+    async function handleUser(user) {
         currentUser = user;
+        isGuest = !!(user && user.isAnonymous);
+        document.body.classList.toggle('bj-guest', isGuest);
 
         if (!user) {
             stopPresence();
@@ -771,6 +824,7 @@
             showFriendCode('');
             showSettingsMsg('');
             window.dispatchEvent(new CustomEvent('bj-auth-changed', { detail: { signedIn: false } }));
+            startGuest();
             return;
         }
 
@@ -784,16 +838,22 @@
         showFriendCode('');
 
         try {
-            const profile = await loadOrCreateProfile(user);
+            let profile = await loadOrCreateProfile(user);
+            if (!isGuest && pendingMerge) profile = await mergeGuestProgress(profile);
             showFriendCode(profile.friendCode || profile.username || '');
             dom.profileName.innerText = profile.username || user.displayName || 'Jugador';
             dom.profileAvatar.src = profile.photoURL || avatarFor(profile.username || user.email);
-            startPresence();
-            listenFriendRequests();
-            checkTrophies().then(showTrophyBanner).catch((err) => console.warn('Copas no disponibles:', err));
+            if ($('settings-account-name')) $('settings-account-name').innerText = profile.username || 'Jugador';
+            if (isGuest) { stopPresence(); stopFriendRequests(); }
+            else {
+                startPresence();
+                listenFriendRequests();
+                checkTrophies().then(showTrophyBanner).catch((err) => console.warn('Copas no disponibles:', err));
+            }
             window.dispatchEvent(new CustomEvent('bj-auth-changed', {
                 detail: {
                     signedIn: true,
+                    guest: isGuest,
                     uid: user.uid,
                     bestLevel: profile.bestLevel || 1,
                     bestHeight: profile.bestHeight || 0,
@@ -805,12 +865,184 @@
             console.error('Error leyendo/creando el perfil en Firestore:', err);
             dom.profileName.innerText = user.displayName || 'Jugador';
         }
+    }
+
+    // ---------------------------------------------------------------
+    // 7b) Vincular la cuenta de invitado con Google (se conserva todo el progreso)
+    // ---------------------------------------------------------------
+    function showLinkMsg(text, ok) {
+        const el = $('link-msg'); if (!el) return;
+        el.innerText = text || ''; el.classList.toggle('hidden', !text);
+        el.style.color = ok ? '#5dffb0' : '#ff6b6b';
+    }
+    const googleInfo = (user, extra) => {
+        const pd = (user.providerData || []).find((x) => x && x.providerId === 'google.com') || {};
+        const prof = (extra && extra.profile) || {};
+        return {
+            name: user.displayName || pd.displayName || prof.name || (pd.email || '').split('@')[0] || 'Jugador',
+            photo: user.photoURL || pd.photoURL || prof.picture || '',
+        };
+    };
+    // Tras vincular (mismo uid): deja de ser invitado, toma nombre y foto de Google y entra en los rankings
+    async function finishLink(user, extra) {
+        const ref = users().doc(user.uid);
+        const snap = await ref.get();
+        const d = snap.exists ? snap.data() : {};
+        const g = googleInfo(user, extra);
+        const patch = {
+            guest: false, displayName: g.name, photoURL: g.photo,
+            bestRank: (d.bestLevel || 1) * RANK_BASE + (d.bestHeight || 0),
+            updatedAt: firebase.firestore.FieldValue.serverTimestamp(),
+        };
+        if (!d.username || /^Invitado\d+$/.test(d.username)) {
+            patch.username = await ensureUniqueUsername(g.name, user.uid);
+            if (!d.friendCodeCustom) {
+                const code = await ensureUniqueFriendCode(patch.username, user.uid);
+                patch.friendCode = code; patch.friendCodeLower = code.toLowerCase();
+            }
+        }
+        await ref.set(patch, { merge: true });
+        // resultado de hoy en la fase diaria: ahora sí cuenta para el ranking
+        try {
+            const today = dailyCol(dailyKey()).doc(user.uid), t = await today.get();
+            if (t.exists && t.data().guest) {
+                await today.update({ guest: false, rankKey: t.data().realKey || 0, username: patch.username || d.username, photoURL: g.photo });
+            }
+        } catch (e) { /* no crítico */ }
+        try { await user.reload(); } catch (e) { /* no crítico */ }
+        showLinkMsg('✔ Cuenta vinculada. ¡Tu progreso está a salvo!', true);
+        await handleUser(auth.currentUser || user);
+    }
+    // La cuenta de Google ya existía (otro dispositivo): se entra en ella y se le suma el progreso del invitado si era mejor
+    async function switchToExistingAccount(credential) {
+        const guest = auth.currentUser;
+        anonInFlight = true; // mientras cambiamos de cuenta no se crea otro invitado
+        if (guest && guest.isAnonymous) {
+            try {
+                const gs = await users().doc(guest.uid).get();
+                pendingMerge = gs.exists ? gs.data() : null;
+                await users().doc(guest.uid).delete().catch(() => { /* no crítico */ });
+                await guest.delete().catch(() => { /* no crítico */ });
+            } catch (e) { /* seguimos igualmente */ }
+        }
+        try { await auth.signInWithCredential(credential); } // onAuthStateChanged hará el resto (y la fusión)
+        finally { anonInFlight = false; }
+        if (!auth.currentUser) startGuest();
+        showLinkMsg('✔ Has entrado en tu cuenta de Google.', true);
+    }
+    async function mergeGuestProgress(profile) {
+        const g = pendingMerge; pendingMerge = null;
+        if (!g) return profile;
+        const patch = {};
+        const gRank = (g.bestLevel || 1) * RANK_BASE + (g.bestHeight || 0);
+        if (gRank > rankKeyOf(profile)) { patch.bestLevel = g.bestLevel; patch.bestHeight = g.bestHeight || 0; patch.bestRank = gRank; }
+        const gSaved = (g.savedGame && g.savedGame.level) || 0, pSaved = (profile.savedGame && profile.savedGame.level) || 0;
+        if (gSaved > pSaved) patch.savedGame = g.savedGame;
+        if (Object.keys(patch).length) {
+            try { await users().doc(currentUser.uid).update(patch); } catch (e) { console.warn('No se pudo sumar el progreso de invitado:', e); }
+        }
+        return { ...profile, ...patch };
+    }
+    async function linkGoogle() {
+        const user = auth.currentUser;
+        if (!user) { signIn(); return; }
+        if (!user.isAnonymous) return;
+        showLinkMsg('');
+        try {
+            const res = await user.linkWithPopup(provider);
+            await finishLink(res.user, res.additionalUserInfo);
+        } catch (err) {
+            if (err.code === 'auth/credential-already-in-use' || err.code === 'auth/email-already-in-use') {
+                if (err.credential) { await switchToExistingAccount(err.credential); return; }
+            }
+            if (!inIframe && ['auth/popup-blocked', 'auth/operation-not-supported-in-this-environment'].includes(err.code)) {
+                try { await user.linkWithRedirect(provider); return; } catch (e2) { err = e2; }
+            }
+            if (err.code !== 'auth/popup-closed-by-user' && err.code !== 'auth/cancelled-popup-request') {
+                console.error('No se pudo vincular la cuenta:', err);
+                const t = (AUTH_ERRORS[err.code] || err.message || 'No se pudo vincular la cuenta');
+                showLinkMsg(t, false); showAuthError(err);
+                toast(t, 4000);
+            }
+        }
+    }
+    // Pide vincular la cuenta para funciones que necesitan una identidad real. Devuelve true si es invitado.
+    function requireAccount(what) {
+        if (!isGuest) return false;
+        $('link-modal-text').innerText = 'Para ' + (what || 'usar esta función') + ' necesitas vincular tu cuenta de Google.';
+        $('link-modal').classList.remove('hidden');
+        return true;
+    }
+    $('link-modal-go').addEventListener('click', () => { $('link-modal').classList.add('hidden'); linkGoogle(); });
+    $('link-modal-close').addEventListener('click', () => $('link-modal').classList.add('hidden'));
+    $('guest-link-btn').addEventListener('click', linkGoogle);
+    $('settings-link-btn').addEventListener('click', linkGoogle);
+
+    // ---------------------------------------------------------------
+    // 7c) Privacidad: qué datos guardamos y borrado de cuenta
+    // ---------------------------------------------------------------
+    $('data-info-btn').addEventListener('click', () => $('data-modal').classList.remove('hidden'));
+    $('data-modal-close').addEventListener('click', () => $('data-modal').classList.add('hidden'));
+    const delInput = $('delete-confirm-input'), delGo = $('delete-go-btn');
+    function deleteMsg(t, ok) { const el = $('delete-msg'); el.innerText = t || ''; el.classList.toggle('hidden', !t); el.style.color = ok ? '#5dffb0' : '#ff6b6b'; }
+    $('delete-account-btn').addEventListener('click', () => {
+        if (!currentUser) { toast('No hay ninguna cuenta que borrar'); return; }
+        delInput.value = ''; delGo.disabled = true; deleteMsg('');
+        $('delete-modal').classList.remove('hidden');
     });
+    $('delete-cancel-btn').addEventListener('click', () => $('delete-modal').classList.add('hidden'));
+    delInput.addEventListener('input', () => { delGo.disabled = delInput.value.trim().toUpperCase() !== 'BORRAR'; });
+    delGo.addEventListener('click', async () => {
+        delGo.disabled = true; deleteMsg('Borrando tus datos…', true);
+        try {
+            await deleteAccount();
+            $('delete-modal').classList.add('hidden');
+            $('settings-modal').classList.add('hidden');
+            try { ['boxjump_unlocked_boxes', 'boxjump_box_type', 'boxjump_tips_seen'].forEach((k) => localStorage.removeItem(k)); } catch (e) { /* no disponible */ }
+            toast('🗑️ Tu cuenta y tus datos se han eliminado', 4500);
+            setTimeout(() => location.reload(), 1500);
+        } catch (err) {
+            console.error('No se pudo eliminar la cuenta:', err);
+            deleteMsg((AUTH_ERRORS[err.code] || 'No se pudo completar el borrado. Inténtalo de nuevo.'), false);
+            delGo.disabled = false;
+        }
+    });
+    async function deleteAccount() {
+        const user = auth.currentUser;
+        if (!user) return;
+        // Google pide un inicio de sesión reciente para borrar la cuenta: se confirma antes de tocar nada
+        if (!user.isAnonymous) await user.reauthenticateWithPopup(provider);
+        const uid = user.uid, safe = (p) => p.catch((e) => console.warn('Borrado parcial:', e));
+        const prof = await users().doc(uid).get().catch(() => null);
+        const days = new Set((prof && prof.exists && prof.data().dailyDays) || []);
+        for (let n = 0; n < 120; n++) days.add(dayKeyBack(n)); // y los últimos 4 meses por si acaso
+        const jobs = [];
+        days.forEach((k) => jobs.push(safe(dailyCol(k).doc(uid).delete())));
+        const qDel = async (q) => { const snap = await q.get(); await Promise.all(snap.docs.map((d) => safe(d.ref.delete()))); };
+        jobs.push(safe(qDel(users().doc(uid).collection('drafts'))));
+        jobs.push(safe(qDel(db.collection('levels').where('authorUid', '==', uid))));
+        jobs.push(safe(qDel(db.collection('friendRequests').where('from', '==', uid))));
+        jobs.push(safe(qDel(db.collection('friendRequests').where('to', '==', uid))));
+        jobs.push(safe(qDel(db.collection('invites').where('from', '==', uid))));
+        jobs.push(safe(qDel(db.collection('invites').where('to', '==', uid))));
+        jobs.push(safe((async () => {
+            const ms = await db.collection('matches').where('players', 'array-contains', uid).get();
+            await Promise.all(ms.docs.map(async (m) => {
+                await safe(m.ref.collection('state').doc(uid).delete());
+                await safe(m.ref.delete());
+            }));
+        })()));
+        jobs.push(safe(db.collection('lobby').doc(uid).delete()));
+        await Promise.all(jobs);
+        stopPresence(); stopFriendRequests();
+        await users().doc(uid).delete();
+        await user.delete(); // al quedarse sin sesión se crea una partida de invitado nueva
+    }
 
     // ---------------------------------------------------------------
     // 8) Listeners de la interfaz
     // ---------------------------------------------------------------
-    dom.googleBtn.addEventListener('click', signIn);
+    dom.googleBtn.addEventListener('click', () => (auth.currentUser && auth.currentUser.isAnonymous ? linkGoogle() : signIn()));
     dom.signoutBtn.addEventListener('click', signOutUser);
 
     dom.rankingFab.addEventListener('click', () => openRankingModal('general'));
@@ -939,16 +1171,19 @@
         const old = snap.exists ? snap.data() : null;
         const h = Math.max(0, Math.min(RANK_BASE - 1, Math.round(res.height || 0)));
         const rankKey = res.cleared * RANK_BASE + h;
-        if (old && (old.rankKey || 0) >= rankKey) return;
+        if (old && (old.realKey || old.rankKey || 0) >= rankKey) return;
         const who = await myIdentity();
         await ref.set({
             uid: currentUser.uid, username: who.username, photoURL: who.photoURL,
-            cleared: res.cleared, height: h, completed: !!res.completed, rankKey, updatedAt: ts(),
+            cleared: res.cleared, height: h, completed: !!res.completed,
+            rankKey: isGuest ? 0 : rankKey, realKey: rankKey, guest: isGuest, updatedAt: ts(),
         });
+        // días jugados: para poder borrar estos resultados si se elimina la cuenta
+        users().doc(currentUser.uid).set({ dailyDays: firebase.firestore.FieldValue.arrayUnion(key) }, { merge: true }).catch(() => { /* no crítico */ });
     }
     async function getDailyTop(key, n) {
         const snap = await dailyCol(key).orderBy('rankKey', 'desc').limit(n || 20).get();
-        return snap.docs.map((d) => ({ uid: d.id, ...d.data() }));
+        return snap.docs.map((d) => ({ uid: d.id, ...d.data() })).filter((r) => !r.guest); // invitados fuera
     }
     async function getMyDaily(key) {
         if (!currentUser) return null;
@@ -1116,7 +1351,9 @@
     // ---------------------------------------------------------------
     window.BJFirebase = {
         isSignedIn: () => !!currentUser,
-        promptSignIn: () => dom.googleBtn.click(),
+        isGuest: () => isGuest,
+        requireAccount, linkGoogle,
+        promptSignIn: () => (isGuest ? linkGoogle() : dom.googleBtn.click()),
         reportRun,
         saveProgress, resetProgress,
         openRanking: (scope) => openRankingModal(scope),

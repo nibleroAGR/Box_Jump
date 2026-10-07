@@ -10,7 +10,7 @@
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Chakra+Petch:wght@500;600;700&family=Outfit:wght@400;500;600;700&display=swap">
     <meta name="theme-color" content="#0b0a24">
-    <link rel="stylesheet" href="style.css?v=26">
+    <link rel="stylesheet" href="style.css?v=27">
 </head>
 
 <body>
@@ -77,6 +77,18 @@
                 <div class="glass-card settings-card">
                     <h2>CONFIGURACIÓN</h2>
                     <div class="settings-section">
+                        <h3>Cuenta</h3>
+                        <div class="guest-only">
+                            <p class="settings-help">Estás jugando como <strong>invitado</strong>: tu progreso solo está en este dispositivo y se pierde si borras los datos del navegador o desinstalas el juego.</p>
+                            <p class="settings-help">Vincula tu cuenta de Google para guardarlo en la nube, aparecer en los rankings, tener amigos, jugar multijugador y publicar fases. Conservas todo tu progreso.</p>
+                            <button id="settings-link-btn" class="google-btn" type="button"><span class="google-icon">G</span> Vincular con Google</button>
+                        </div>
+                        <div class="account-only">
+                            <p class="settings-help">Conectado con Google como <strong id="settings-account-name">-</strong>.</p>
+                        </div>
+                        <p id="link-msg" class="settings-msg hidden"></p>
+                    </div>
+                    <div class="settings-section needs-account">
                         <h3>Código de amigo</h3>
                         <p class="settings-help">Es el código que compartes con tus amigos. Por defecto es tu nombre de usuario.</p>
                         <div class="settings-row">
@@ -87,7 +99,7 @@
                         <button id="settings-code-reset" class="secondary-btn ghost-btn" type="button">Usar mi nombre de usuario</button>
                         <p id="settings-msg" class="settings-msg hidden"></p>
                     </div>
-                    <div class="settings-section">
+                    <div class="settings-section needs-account">
                         <h3>Añadir amigo</h3>
                         <p class="settings-help">Escribe el código de tu amigo. Le llegará una solicitud de amistad que tendrá que aceptar.</p>
                         <div class="settings-row stacked">
@@ -115,6 +127,12 @@
                         <h3>Nueva partida</h3>
                         <p class="settings-help">Empieza desde el nivel 1. Perderás tu partida guardada.</p>
                         <button id="settings-newgame-btn" class="danger-btn" type="button">🎮 EMPEZAR NUEVA PARTIDA</button>
+                    </div>
+                    <div class="settings-section">
+                        <h3>Privacidad y datos</h3>
+                        <a class="settings-link-btn" href="privacy.html" target="_blank" rel="noopener">📄 Política de privacidad</a>
+                        <button id="data-info-btn" class="secondary-btn ghost-btn" type="button">🔒 Qué datos guardamos</button>
+                        <button id="delete-account-btn" class="danger-btn" type="button">🗑️ ELIMINAR MI CUENTA Y DATOS</button>
                     </div>
                     <button id="close-settings-btn" type="button">CERRAR</button>
                 </div>
@@ -162,7 +180,7 @@
                     <h1>BOX JUMP</h1>
                     <p>Precisión es la clave</p>
                     <div id="login-block">
-                        <p class="auth-hint">Inicia sesión con Google para jugar y guardar tu puntuación</p>
+                        <p id="auth-hint" class="auth-hint">Preparando tu partida…</p>
                         <button id="google-signin-btn" class="google-btn" type="button">
                             <span class="google-icon">G</span> Conectar con Google
                         </button>
@@ -177,6 +195,10 @@
                         <div id="username-edit-row" class="hidden">
                             <input id="username-input" type="text" maxlength="20" placeholder="Nombre de usuario" />
                             <button id="save-username-btn">✔</button>
+                        </div>
+                        <div id="guest-banner" class="guest-only">
+                            <span>👤 Juegas como <strong>invitado</strong>. Vincula tu cuenta para no perder tu progreso, salir en los rankings y jugar con amigos.</span>
+                            <button id="guest-link-btn" class="google-btn small-google" type="button"><span class="google-icon">G</span> Vincular con Google</button>
                         </div>
                         <div id="menu-buttons">
                             <div class="menu-row" id="row-play">
@@ -200,7 +222,7 @@
                             </div>
                         </div>
                         <p id="trophy-banner" class="trophy-banner hidden"></p>
-                        <button id="signout-btn" class="secondary-btn ghost-btn">Cerrar sesión</button>
+                        <button id="signout-btn" class="secondary-btn ghost-btn account-only">Cerrar sesión</button>
                         <p class="build-tag">Versión 2.0</p>
                     </div>
                 </div>
@@ -365,11 +387,47 @@
                 </div>
             </div>
 
+            <!-- ================= VINCULAR CUENTA (invitado) ================= -->
+            <div id="link-modal" class="screen hidden">
+                <div class="glass-card">
+                    <h2>🔗 VINCULA TU CUENTA</h2>
+                    <p id="link-modal-text" class="settings-help"></p>
+                    <p class="settings-help">Conservas todo tu progreso de invitado.</p>
+                    <button id="link-modal-go" class="google-btn" type="button"><span class="google-icon">G</span> Vincular con Google</button>
+                    <button id="link-modal-close" class="secondary-btn ghost-btn" type="button">Ahora no</button>
+                </div>
+            </div>
+            <!-- ================= QUÉ DATOS GUARDAMOS ================= -->
+            <div id="data-modal" class="screen hidden">
+                <div class="glass-card data-card">
+                    <h2>🔒 TUS DATOS</h2>
+                    <div class="help-item"><strong>Qué guardamos</strong> Tu nombre de usuario y código de amigo, tu foto y nombre de Google (solo si vinculas la cuenta), tu progreso (nivel, altura, partida guardada), tus resultados de la fase diaria y multijugador, tu lista de amigos y solicitudes, y las fases que crees.</div>
+                    <div class="help-item"><strong>Para qué</strong> Solo para que funcione el juego: guardar tu partida, los rankings, los amigos y el multijugador. No mostramos publicidad ni vendemos ni compartimos tus datos con terceros.</div>
+                    <div class="help-item"><strong>Qué ven los demás</strong> Tu nombre de usuario, tu foto, tu nivel y tus resultados en los rankings, y si estás conectado (solo tus amigos).</div>
+                    <div class="help-item"><strong>Dónde</strong> En Google Firebase, con conexión cifrada. Los ajustes (sonido, barra de precisión, cajas desbloqueadas) se guardan solo en tu dispositivo.</div>
+                    <div class="help-item"><strong>Borrarlos</strong> Cuando quieras, con "Eliminar mi cuenta y datos" en Configuración. Se borran al momento y no se pueden recuperar.</div>
+                    <button id="data-modal-close" type="button">CERRAR</button>
+                </div>
+            </div>
+            <!-- ================= ELIMINAR CUENTA ================= -->
+            <div id="delete-modal" class="screen hidden">
+                <div class="glass-card">
+                    <h2>🗑️ ELIMINAR CUENTA</h2>
+                    <p class="settings-help">Se borrarán para siempre tu perfil, tu progreso y partida guardada, tus resultados en los rankings, tus amigos y solicitudes, tus carreras y las fases que hayas creado o publicado. <strong>No se puede deshacer.</strong></p>
+                    <p class="settings-help">Escribe <strong>BORRAR</strong> para confirmar:</p>
+                    <input id="delete-confirm-input" class="settings-input" type="text" maxlength="10" autocomplete="off" autocapitalize="characters" placeholder="BORRAR" />
+                    <p id="delete-msg" class="settings-msg hidden"></p>
+                    <button id="delete-go-btn" class="danger-btn" type="button" disabled>ELIMINAR DEFINITIVAMENTE</button>
+                    <button id="delete-cancel-btn" class="secondary-btn ghost-btn" type="button">Cancelar</button>
+                </div>
+            </div>
+
             <!-- ================= NUEVA CAJA (primera vez que aparece) ================= -->
             <div id="box-intro-modal" class="screen hidden">
                 <div class="glass-card">
-                    <p class="box-intro-tag">📦 ¡NUEVA CAJA DESBLOQUEADA!</p>
+                    <p id="box-intro-tag" class="box-intro-tag">📦 ¡NUEVA CAJA DESBLOQUEADA!</p>
                     <canvas id="box-intro-canvas" width="80" height="80"></canvas>
+                    <div id="tip-icon" class="tip-icon hidden"></div>
                     <h2 id="box-intro-name"></h2>
                     <p id="box-intro-desc" class="settings-help"></p>
                     <button id="box-intro-ok" type="button">ENTENDIDO</button>
@@ -379,16 +437,16 @@
         </div>
 
         <script src="audio.js?v=4"></script>
-        <script src="game.js?v=36"></script>
+        <script src="game.js?v=37"></script>
 
         <!-- SDK "compat" de Firebase: archivos únicos clásicos, sin import/export
              encadenados, para máxima compatibilidad entre navegadores/dispositivos. -->
         <script src="https://www.gstatic.com/firebasejs/10.13.2/firebase-app-compat.js"></script>
         <script src="https://www.gstatic.com/firebasejs/10.13.2/firebase-auth-compat.js"></script>
         <script src="https://www.gstatic.com/firebasejs/10.13.2/firebase-firestore-compat.js"></script>
-        <script src="backend.js?v=15"></script>
-        <script src="modes.js?v=7"></script>
-        <script src="multiplayer.js?v=2"></script>
+        <script src="backend.js?v=16"></script>
+        <script src="modes.js?v=8"></script>
+        <script src="multiplayer.js?v=3"></script>
     </div>
 </body>
 
