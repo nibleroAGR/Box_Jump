@@ -342,6 +342,12 @@ function placeOnPlatform() {
 }
 
 // Plataforma "segura": no se mueve, no está a punto de romperse ni la está destruyendo un dron
+// Hielo: velocidad máxima de deslizamiento (px por paso) y rozamiento. Antes 0.98 sin tope: salía disparada.
+const ICE_MAX_VX = 2.2;
+const ICE_FRICTION = 0.96;
+// Plataformas intermitentes: 3 s encendidas / 3 s apagadas, con aviso parpadeando antes de cada cambio
+const FLASH_MS = 3000;
+const FLASH_WARN_MS = 800;
 const UNSAFE_TYPES = ['moving', 'oscillating', 'flash', 'temp_full', 'vanishing', 'fragile'];
 function isSafePlatform(p) {
     return !!p && !p.isBroken && !p.vanishingStarted && !(p.rayT > 0) && !UNSAFE_TYPES.includes(p.type) &&
@@ -851,7 +857,10 @@ const player = {
             this.straightBounce = false;
             // Fricción según plataforma
             let friction = 0.85;
-            if (this.currentPlatform && this.currentPlatform.type === 'ice') friction = 0.98;
+            if (this.currentPlatform && this.currentPlatform.type === 'ice') { // hielo: desliza, pero despacio
+                this.vx = Math.max(-ICE_MAX_VX, Math.min(ICE_MAX_VX, this.vx));
+                friction = ICE_FRICTION;
+            }
             if (this.currentPlatform && (this.currentPlatform.type === 'sticky' || this.currentPlatform.type === 'mini_sticky')) friction = 0;
             if (boxKind() === 'sticky') friction = 0; // la caja pegajosa se queda clavada donde cae
             if (this.currentPlatform && this.currentPlatform.type === 'shield') friction = 0; // el escudo la sujeta
@@ -1152,15 +1161,19 @@ class Platform {
         if (this.isBroken) return;
         const x = this.x, y = this.y, h = this.h, pw = this.type === 'temp_full' ? width : this.w;
         const col = this.getColor(), t = performance.now();
-        if (this.type === 'flash' && !this.isVisible) { // apagada: solo el contorno punteado
+        // intermitente: fracción que queda de la fase actual, para avisar antes de cambiar
+        const flashLeft = this.type === 'flash' && this.flashTime !== undefined ? FLASH_MS - (gameTime - this.flashTime) : FLASH_MS;
+        const flashWarn = this.type === 'flash' && flashLeft < FLASH_WARN_MS;
+        if (this.type === 'flash' && !this.isVisible) { // apagada: solo el contorno punteado (se ilumina justo antes de volver)
             ctx.save();
-            ctx.setLineDash([4, 5]); ctx.strokeStyle = 'rgba(232,238,255,0.22)'; ctx.lineWidth = 1.5;
+            const back = flashWarn ? 0.35 + 0.35 * (0.5 + 0.5 * Math.sin(t / 70)) : 0.22;
+            ctx.setLineDash([4, 5]); ctx.strokeStyle = 'rgba(232,238,255,' + back + ')'; ctx.lineWidth = 1.5;
             roundRectPath(ctx, x + 0.5, y + 0.5, pw - 1, h - 1, 6); ctx.stroke();
             ctx.restore();
             return;
         }
         ctx.save();
-        ctx.globalAlpha = this.alpha;
+        ctx.globalAlpha = this.alpha * (flashWarn ? 0.35 + 0.65 * (0.5 + 0.5 * Math.sin(t / 55)) : 1); // parpadea antes de apagarse
 
         // haz de luz de la meta
         if (this.isGoal) {
@@ -1332,9 +1345,11 @@ class Platform {
         // Visibilidad (Flash)
         if (this.type === 'flash') {
             if (this.flashTime === undefined) this.flashTime = gameTime;
-            if (gameTime - this.flashTime > 2000) {
+            if (gameTime - this.flashTime >= FLASH_MS) {
                 this.isVisible = !this.isVisible;
                 this.flashTime = gameTime;
+                // al apagarse deja de contar como "la plataforma de la caja" (si vuelve a caer en ella, cuenta como aterrizaje)
+                if (!this.isVisible && player.currentPlatform === this) player.currentPlatform = null;
             }
         }
 
